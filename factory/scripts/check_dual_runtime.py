@@ -11,6 +11,15 @@ Exit codes: 0 clean, 1 violations.
 """
 from __future__ import annotations
 
+# UTF-8 console safety (standalone entrypoint — see factory_lib for rationale):
+# force UTF-8 stdout/stderr so non-Latin-1 glyphs don't crash a cp1252 console.
+import sys as _utf8_sys
+for _stream in (_utf8_sys.stdout, _utf8_sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 import json
 import re
 import subprocess
