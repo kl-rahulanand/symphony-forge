@@ -1,0 +1,12 @@
+{
+  "files": {
+    "win-sbx-exploration-brief.md": {
+      "sha256": "af66eaf4484360bd2903db065bfec53586082bca95a06c84e3877f27fd9ae654",
+      "added": "2026-08-13T05:27:45+00:00",
+      "status": "ignored",
+      "outputs": [],
+      "notes": "orchestrator-authored exploration brief for the WIN-SBX prompt-file rescue run, not client context; findings are captured in the plan",
+      "marked_at": "2026-08-13T05:28:00+00:00"
+    }
+  }
+}

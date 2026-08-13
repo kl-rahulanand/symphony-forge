@@ -2590,6 +2590,8 @@ def test_init_and_upgrade_ship_portable_hook_commands(tmp_path):
     assert initialized.returncode == 0, initialized.stdout + initialized.stderr
     assert len(commands(repo, ".claude/settings.json")) == 5
     assert len(commands(repo, ".codex/hooks.json")) == 3
+    config = repo / ".codex" / "config.toml"
+    assert 'sandbox_mode = "workspace-write"' in config.read_text().splitlines()
     assert (repo / "forge.cmd").is_file()
     attributes = repo / ".gitattributes"
     assert "forge text eol=lf" in attributes.read_text().splitlines()
@@ -2610,14 +2612,19 @@ def test_init_and_upgrade_ship_portable_hook_commands(tmp_path):
     ) + "\n")
     for relative in (".claude/settings.json", ".codex/hooks.json"):
         (repo / relative).write_text(json.dumps({"hooks": {}}) + "\n")
+    config.write_text(config.read_text().replace(
+        'sandbox_mode = "workspace-write"',
+        'sandbox_mode = "danger-full-access"',
+    ))
     git(repo, "add", ".claude/settings.json", ".codex/hooks.json",
-        ".gitattributes", "forge.cmd")
+        ".codex/config.toml", ".gitattributes", "forge.cmd")
     git(repo, "commit", "-q", "-m", "degrade hook registrations")
 
     upgraded = upgrade_into(repo)
     assert upgraded.returncode == 0, upgraded.stdout + upgraded.stderr
     assert len(commands(repo, ".claude/settings.json")) == 5
     assert len(commands(repo, ".codex/hooks.json")) == 3
+    assert 'sandbox_mode = "workspace-write"' in config.read_text().splitlines()
     assert (repo / "forge.cmd").is_file()
     assert "forge text eol=lf" in attributes.read_text().splitlines()
     assert all(
@@ -7138,6 +7145,52 @@ def test_check_pr_ticket_fails_missing_history(repo):
     git(repo, "commit", "-q", "-m", "completion without history")
 
     code, out = check_pr_ticket(repo, base, f"feat/{key}-gate-a")
+
+    assert code != 0 and "no completed work record" in out, out
+
+
+def test_check_pr_ticket_exempts_harness_revendor(repo):
+    # A harness re-vendor changes only harness-owned paths AND rewrites the
+    # vendor manifest — it completes no roadmap story and needs no ticket.
+    base = pr_ticket_base(repo)
+    (repo / "constitution" / "VENDOR_MANIFEST.json").write_text(
+        '{"harness_commit": "deadbeef", "files": {}}\n')
+    (repo / "factory" / "scripts" / "verify.py").write_text("# re-vendored\n")
+    git(repo, "add", "constitution/VENDOR_MANIFEST.json",
+        "factory/scripts/verify.py")
+    git(repo, "commit", "-q", "-m", "chore: re-vendor harness")
+
+    code, out = check_pr_ticket(repo, base, "chore/harness-upgrade-abc123")
+
+    assert code == 0 and "harness re-vendor" in out, out
+
+
+def test_check_pr_ticket_revendor_requires_manifest_marker(repo):
+    # Harness-owned edits WITHOUT the manifest marker are not a sanctioned
+    # re-vendor (vendor-integrity refuses hand-edits), so the ticket still holds.
+    base = pr_ticket_base(repo)
+    (repo / "factory" / "scripts" / "verify.py").write_text("# tweaked\n")
+    git(repo, "add", "factory/scripts/verify.py")
+    git(repo, "commit", "-q", "-m", "poke a harness file")
+
+    code, out = check_pr_ticket(repo, base, "chore/harness-poke")
+
+    assert code != 0 and "no completed work record" in out, out
+
+
+def test_check_pr_ticket_revendor_rejects_mixed_product_change(repo):
+    # A PR that also touches product paths is not a pure re-vendor: the ticket
+    # requirement still applies even with the manifest in the diff.
+    base = pr_ticket_base(repo)
+    (repo / "constitution" / "VENDOR_MANIFEST.json").write_text(
+        '{"harness_commit": "deadbeef", "files": {}}\n')
+    (repo / "plans").mkdir(exist_ok=True)
+    (repo / "plans" / "product-note.md").write_text("product change\n")
+    git(repo, "add", "constitution/VENDOR_MANIFEST.json",
+        "plans/product-note.md")
+    git(repo, "commit", "-q", "-m", "re-vendor plus product change")
+
+    code, out = check_pr_ticket(repo, base, "chore/mixed")
 
     assert code != 0 and "no completed work record" in out, out
 
@@ -12379,10 +12432,17 @@ def test_scaffold_freezes_gate_surface_and_check_verifies(repo):
     assert manifest.exists()  # forge init armed it from birth
     files = json.loads(manifest.read_text())["files"]
     assert "factory/scripts/verify.py" in files and "forge" in files
+    assert ".codex/hooks.json" in files
     assert not any("__pycache__" in f or f.endswith(".pyc") for f in files)
     code, out = run(repo, "check_vendor_integrity.py")
     assert code == 0 and "OK" in out, out
+    # disarmed vendored hook -> drift
+    hooks = repo / ".codex" / "hooks.json"
+    hooks.write_text(json.dumps({"hooks": {}}) + "\n")
+    code, out = run(repo, "check_vendor_integrity.py")
+    assert code != 0 and "edited: .codex/hooks.json" in out, out
     # edited gate file -> drift
+    git(repo, "checkout", "--", ".codex/hooks.json")
     verify = repo / "factory" / "scripts" / "verify.py"
     verify.write_text(verify.read_text() + "# weakened\n")
     code, out = run(repo, "check_vendor_integrity.py")
@@ -12613,25 +12673,36 @@ def test_pr_ready_blocks_on_unverified_plan_contracts(repo, tmp_path):
 
 
 def test_adopt_and_upgrade_refreeze_the_manifest(repo, tmp_path):
-    # adopt arms a migrated repo
+    # adopt repairs a client hook and arms the migrated repo
     legacy = existing_repo(tmp_path)
+    legacy_hooks = legacy / ".codex" / "hooks.json"
+    legacy_hooks.parent.mkdir(parents=True)
+    legacy_hooks.write_text(json.dumps({"hooks": {}}) + "\n")
+    git(legacy, "add", ".codex/hooks.json")
+    git(legacy, "commit", "-q", "-m", "disable vendored hooks")
     code, out = adopt(legacy)
     assert code == 0, out
-    assert (legacy / "constitution" / "VENDOR_MANIFEST.json").exists()
+    legacy_manifest = legacy / "constitution" / "VENDOR_MANIFEST.json"
+    assert legacy_manifest.exists()
+    assert ".codex/hooks.json" in json.loads(legacy_manifest.read_text())["files"]
+    assert json.loads(legacy_hooks.read_text())["hooks"]
     code, out = run(legacy, "check_vendor_integrity.py")
     assert code == 0 and "OK" in out, out
-    # a drifted client repo comes back clean after re-vendoring
-    verify = repo / "factory" / "scripts" / "verify.py"
-    verify.write_text(verify.read_text() + "# local patch\n")
+    # upgrade repairs a drifted hook and re-hashes it clean
+    hooks = repo / ".codex" / "hooks.json"
+    hooks.write_text(json.dumps({"hooks": {}}) + "\n")
     git(repo, "add", "-A")
     git(repo, "commit", "-q", "-m", "drift")
     code, out = run(repo, "check_vendor_integrity.py")
-    assert code != 0
+    assert code != 0 and "edited: .codex/hooks.json" in out, out
     proc = subprocess.run(
         [sys.executable, str(HARNESS / "factory" / "scripts" / "forge.py"),
          "upgrade", "--target", str(repo)],
         cwd=HARNESS, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    manifest = json.loads((repo / "constitution" / "VENDOR_MANIFEST.json").read_text())
+    assert ".codex/hooks.json" in manifest["files"]
+    assert json.loads(hooks.read_text())["hooks"]
     code, out = run(repo, "check_vendor_integrity.py")
     assert code == 0 and "OK" in out, out
 

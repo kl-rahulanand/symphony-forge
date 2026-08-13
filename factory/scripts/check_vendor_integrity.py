@@ -21,7 +21,7 @@ from pathlib import Path
 from factory_lib import dump_json, repo_root
 
 GATE_TREES = ("factory/scripts", "factory/schemas", "factory/prompts")
-GATE_FILES = ("forge", ".claude/settings.json")
+GATE_FILES = ("forge", ".claude/settings.json", ".codex/hooks.json")
 MANIFEST_REL = "constitution/VENDOR_MANIFEST.json"
 
 

@@ -9,3 +9,6 @@ note drifts.
 
 - [Factory entry contract](factory-entry-contract.md) — specs, roadmap,
   sign-off, and the two legitimate exits from the planning lock.
+- [Signal resolution is auto](signal-resolution-is-auto.md) —
+  permission-shaped worker signals are resolved autonomously via the
+  ledgered paths; humans gate plans, decisions, and scope changes only.
