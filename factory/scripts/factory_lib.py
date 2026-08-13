@@ -971,7 +971,16 @@ def slugify(text: str) -> str:
 
 
 def run_cmd(command: str, cwd: Path | None = None) -> dict[str, Any]:
-    proc = subprocess.run(command, cwd=cwd or repo_root(), shell=True, capture_output=True, text=True)
+    # Decode captured child output as UTF-8 explicitly, matching the UTF-8 the
+    # factory scripts now force on their own stdout/stderr. Without this the
+    # parent falls back to the ANSI code page (cp1252 on Windows) when invoked
+    # directly without PYTHONUTF8, so a check that emits a non-Latin-1 glyph or
+    # a non-ASCII repo filename decodes to mojibake — or raises UnicodeDecodeError
+    # on a byte cp1252 leaves undefined — aborting verify before evidence lands.
+    # errors="replace" degrades a stray byte instead of crashing.
+    proc = subprocess.run(command, cwd=cwd or repo_root(), shell=True,
+                          capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
     return {
         "command": command,
         "exit_code": proc.returncode,
