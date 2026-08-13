@@ -11,6 +11,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Windows/default-console UTF-8 safety. Python points stdout/stderr at the
+# platform's ANSI code page (cp1252 on Windows), so the em-dashes, arrows and
+# check marks this tooling prints raise UnicodeEncodeError mid-write and abort
+# the command — `forge next` and even `--help` crash on a fresh Windows box.
+# Force UTF-8 at import (errors="replace" degrades a stray glyph rather than
+# crashing). This is the belt to the `./forge`/`forge.cmd` launchers' exported
+# PYTHONUTF8=1: a direct `python factory/scripts/<script>.py` invocation never
+# gets that env, and every entrypoint here imports factory_lib.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):  # replaced/detached stream, or closed
+        pass
+
 
 def repo_root() -> Path:
     out = subprocess.run(
