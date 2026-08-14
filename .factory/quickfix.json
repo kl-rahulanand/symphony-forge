@@ -1,0 +1,11 @@
+{
+  "id": "Q-0071-f7fa",
+  "profile": "lite",
+  "reason": "PR #103 scaffold-check red: the new no-UTF-8-locale CI step includes 'forge doctor --fast', which is a MACHINE-readiness probe \u2014 it exits 1 on any bare CI runner (codex plugin/skills legitimately absent there), independent of encoding. The locale assertions and all checkers passed. One-line fix: drop doctor --fast from that step; 'forge next' plus the four standalone checkers are the encoding exercise.",
+  "started_at": "2026-08-13T19:35:11+00:00",
+  "max_files": 5,
+  "files": [],
+  "harness_source": true,
+  "by": "Ravi",
+  "base_sha": "63f9e8b56aad279ae678d718722c05ba9fc9d554"
+}

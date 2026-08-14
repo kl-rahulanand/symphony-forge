@@ -81,7 +81,7 @@ def epics_approved(base: Path) -> bool:
     """The PM->EM handoff gate: an accepted epics-approved decision record —
     judged on PARSED frontmatter, never on prose that mentions the words."""
     for record in (base / "docs" / "decisions").glob("*epics-approved*.md"):
-        match = FRONTMATTER.match(record.read_text())
+        match = FRONTMATTER.match(record.read_text(encoding="utf-8"))
         if not match:
             continue
         fields = {
@@ -326,7 +326,7 @@ def cmd_derive(args: argparse.Namespace) -> None:
     if not source.is_file():
         fail(f"roadmap input {source} not found")
     try:
-        payload = json.loads(source.read_text())
+        payload = json.loads(source.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         fail(f"invalid JSON in {source}: {exc}")
     if not isinstance(payload, dict):
@@ -410,7 +410,7 @@ def cmd_import(args: argparse.Namespace) -> None:
             '`./forge decision accept epics-approved --by "<PM name>"`.'
         )
     try:
-        payload = json.loads(source.read_text())
+        payload = json.loads(source.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         fail(f"invalid JSON in {source}: {exc}")
     if not isinstance(payload, dict):
@@ -776,7 +776,7 @@ def cmd_heal(args: argparse.Namespace) -> None:
     if not path.exists():
         fail("no plans/roadmap.json to heal")
     try:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         items = data.get("items", [])
         epics = data.get("epics", [])
     except json.JSONDecodeError:
@@ -784,7 +784,7 @@ def cmd_heal(args: argparse.Namespace) -> None:
         for stage in ("2", "3"):
             proc = subprocess.run(
                 ["git", "show", f":{stage}:plans/roadmap.json"],
-                cwd=base, capture_output=True, text=True,
+                cwd=base, capture_output=True, text=True, encoding="utf-8",
             )
             if proc.returncode == 0:
                 stages.append(json.loads(proc.stdout))

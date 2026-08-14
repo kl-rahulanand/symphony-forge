@@ -120,7 +120,7 @@ def pending_stages(base: Path) -> list[dict]:
 def _git(base: Path, *args: str) -> str:
     proc = subprocess.run(
         ["git", *args], cwd=base, capture_output=True, text=True,
-        env=clean_git_env())
+        env=clean_git_env(), encoding="utf-8", errors="surrogateescape")
     return proc.stdout if proc.returncode == 0 else ""
 
 
@@ -847,13 +847,17 @@ def _run_required_tests(base: Path, stage_id: str, task: dict) -> None:
             while tokens and "=" in tokens[0] and not tokens[0].startswith("="):
                 name, value = tokens.pop(0).split("=", 1)
                 env[name] = value
+            env["PYTHONUTF8"] = "1"
             proc: subprocess.Popen[str] | None = None
             process_baseline: dict[int, tuple[int, str]] | None = None
             process_identity = ""
             stdout = ""
             stderr = ""
-            with tempfile.TemporaryFile(mode="w+t") as stdout_log, \
-                    tempfile.TemporaryFile(mode="w+t") as stderr_log:
+            with tempfile.TemporaryFile(
+                    mode="w+t", encoding="utf-8", errors="replace"
+            ) as stdout_log, tempfile.TemporaryFile(
+                    mode="w+t", encoding="utf-8", errors="replace"
+            ) as stderr_log:
                 try:
                     with blocked_termination_signals():
                         process_baseline = _process_table()
@@ -942,8 +946,12 @@ def _run_verify_commands(base: Path, stage_id: str, task: dict) -> None:
         process_token = f"verify-{uuid.uuid4().hex}"
         env = os.environ.copy()
         env["FORGE_PROCESS_TOKEN"] = process_token
-        with tempfile.TemporaryFile(mode="w+t") as stdout_log, \
-                tempfile.TemporaryFile(mode="w+t") as stderr_log:
+        env["PYTHONUTF8"] = "1"
+        with tempfile.TemporaryFile(
+                mode="w+t", encoding="utf-8", errors="replace"
+        ) as stdout_log, tempfile.TemporaryFile(
+                mode="w+t", encoding="utf-8", errors="replace"
+        ) as stderr_log:
             try:
                 with blocked_termination_signals():
                     process_baseline = _process_table()
@@ -1143,7 +1151,7 @@ def _cmd_migrate_locked(args: argparse.Namespace, base: Path) -> None:
     resolved_base = resolved_base.strip()
     ancestor = subprocess.run(
         ["git", "merge-base", "--is-ancestor", resolved_base, "HEAD"],
-        cwd=base, capture_output=True, text=True, env=clean_git_env())
+        cwd=base, capture_output=True, text=True, env=clean_git_env(), encoding="utf-8")
     if ancestor.returncode == 1:
         fail(f"--base {resolved_base!r} is not an ancestor of HEAD")
     if ancestor.returncode != 0:

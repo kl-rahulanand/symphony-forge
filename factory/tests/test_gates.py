@@ -20,6 +20,7 @@ import signal
 import subprocess
 import sys
 import threading
+import types
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -42,6 +43,29 @@ def run(repo: Path, script: str, *args: str, stdin: str | None = None,
         env={**os.environ, **(env or {})},
     )
     return proc.returncode, proc.stdout + proc.stderr
+
+
+class FakePsutilAccessDenied(Exception):
+    pass
+
+
+class FakePsutilNoSuchProcess(Exception):
+    pass
+
+
+def fake_psutil(processes, *, current_user="owner"):
+    by_pid = {process.pid: process for process in processes}
+    return types.SimpleNamespace(
+        AccessDenied=FakePsutilAccessDenied,
+        NoSuchProcess=FakePsutilNoSuchProcess,
+        Error=Exception,
+        STATUS_ZOMBIE="zombie",
+        process_iter=lambda _attrs=None: iter(processes),
+        Process=lambda pid=None: (
+            types.SimpleNamespace(username=lambda: current_user)
+            if pid is None else by_pid[pid]
+        ),
+    )
 
 
 def test_upgrade_project_skill_structure_and_registration():
@@ -471,6 +495,201 @@ def test_full_lifecycle_and_archive(repo, tmp_path):
     # Idempotent rerun (autoreview r2)
     code, out = run(repo, "pr_ready.py")
     assert code == 0 and "shipped so far: ENG-1" in out
+
+
+def test_encoding_hygiene_gate_catches_each_violation_class(tmp_path):
+    from check_encoding_hygiene import (
+        BYTE_MODE_ALLOWLIST, BYTE_PATH_ALLOWLIST, check_file,
+    )
+
+    violations = {
+        "subprocess.py": (
+            "import subprocess\n"
+            "subprocess.run(['tool'], capture_output=True, "
+            "encoding='latin-1')\n"
+        ),
+        "subprocess_alias.py": (
+            "from subprocess import run as invoke\n"
+            "invoke(['tool'], capture_output=True, text=True)\n"
+        ),
+        "subprocess_input.py": (
+            "import subprocess\n"
+            "subprocess.run(['tool'], input='payload', text=True)\n"
+        ),
+        "popen_stdin.py": (
+            "import subprocess\n"
+            "subprocess.Popen(['tool'], stdin=subprocess.PIPE, text=True)\n"
+        ),
+        "popen_stdin_alias.py": (
+            "import subprocess as process\n"
+            "process.Popen(['tool'], stdin=process.PIPE, text=True)\n"
+        ),
+        "local_subprocess_alias.py": (
+            "def launch():\n"
+            "    from subprocess import PIPE, Popen\n"
+            "    Popen(['tool'], stdin=PIPE, text=True)\n"
+        ),
+        "path_text.py": "from pathlib import Path\nPath('x').read_text()\n",
+        "open_text.py": "open('x', 'a')\n",
+        "temp_text.py": (
+            "import tempfile\n"
+            "tempfile.NamedTemporaryFile(mode='w+')\n"
+        ),
+        "temp_alias.py": (
+            "from tempfile import NamedTemporaryFile as temp\n"
+            "temp(mode='w+')\n"
+        ),
+        "stdin.py": "import sys\nsys.stdin.read()\n",
+        "input.py": "input()\n",
+        "stdin_alias.py": "from sys import stdin as source\nsource.read()\n",
+        "local_stdin_alias.py": (
+            "def read():\n"
+            "    from sys import stdin as source\n"
+            "    return source.read()\n"
+        ),
+        "stdin_getattr.py": "import sys\ngetattr(sys, 'stdin').read()\n",
+        "replace.py": (
+            "from pathlib import Path\n"
+            "Path('x').read_text(encoding='utf-8', errors='replace')\n"
+        ),
+        "surrogateescape.py": (
+            "from pathlib import Path\n"
+            "Path('x').read_text(encoding='utf-8', errors='surrogateescape')\n"
+        ),
+        "ignore.py": "open('x', encoding='utf-8', errors='ignore')\n",
+        "backslashreplace.py": (
+            "open('x', encoding='utf-8', errors='backslashreplace')\n"
+        ),
+        "dynamic_errors.py": (
+            "policy = 'strict'\nopen('x', encoding='utf-8', errors=policy)\n"
+        ),
+    }
+    expected = {
+        "subprocess.py": {"subprocess-text"},
+        "subprocess_alias.py": {"subprocess-text"},
+        "subprocess_input.py": {"subprocess-text"},
+        "popen_stdin.py": {"subprocess-text"},
+        "popen_stdin_alias.py": {"subprocess-text"},
+        "local_subprocess_alias.py": {"subprocess-text"},
+        "path_text.py": {"text-file"},
+        "open_text.py": {"text-file"},
+        "temp_text.py": {"text-file"},
+        "temp_alias.py": {"text-file"},
+        "stdin.py": {"stdin"},
+        "input.py": {"stdin"},
+        "stdin_alias.py": {"stdin"},
+        "local_stdin_alias.py": {"stdin"},
+        "stdin_getattr.py": {"stdin"},
+        "replace.py": {"errors-policy"},
+        "surrogateescape.py": {"errors-policy"},
+        "ignore.py": {"errors-policy"},
+        "backslashreplace.py": {"errors-policy"},
+        "dynamic_errors.py": {"errors-policy"},
+    }
+    for name, source in violations.items():
+        path = tmp_path / name
+        path.write_text(source, encoding="utf-8")
+        assert {
+            violation.rule for violation in check_file(path, root=tmp_path)
+        } == expected[name]
+
+    allowed = tmp_path / "allowed.py"
+    allowed.write_text(
+        "import io, os, subprocess, sys, tempfile\n"
+        "subprocess.run(['tool'], capture_output=True, text=True, "
+        "encoding='utf-8', errors='replace')\n"
+        "open('path', encoding='utf-8', errors='surrogateescape')\n"
+        "open('bytes', 'rb')\n"
+        "os.open('safe', os.O_RDONLY, dir_fd=3)\n"
+        "webbrowser.open('https://example.test')\n"
+        "tempfile.TemporaryFile(mode='w+t', encoding='utf-8')\n"
+        "io.TextIOWrapper(sys.stdin.buffer, encoding='utf-8', "
+        "errors='strict').read()\n",
+        encoding="utf-8",
+    )
+    assert check_file(
+        allowed,
+        root=tmp_path,
+        replace_allowlist=frozenset({"allowed.py:2"}),
+        byte_path_allowlist={"allowed.py:3": "lossless path"},
+        stdin_allowlist=frozenset({"allowed.py:8"}),
+    ) == []
+    assert "factory/scripts/forge_cli/phase.py:23" in BYTE_PATH_ALLOWLIST
+    assert "factory/scripts/forge_cli/upgrade.py:314" in BYTE_MODE_ALLOWLIST
+    assert "factory/scripts/pr_ready.py:349" in BYTE_MODE_ALLOWLIST
+
+    byte_site = tmp_path / "byte_site.py"
+    byte_site.write_text(
+        "import subprocess\n"
+        "subprocess.run(['tool'], text=True, encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    assert {violation.rule for violation in check_file(
+        byte_site,
+        root=tmp_path,
+        byte_mode_allowlist={"byte_site.py:2": "must stay bytes"},
+    )} == {"byte-mode"}
+
+
+def test_encoding_hygiene_gate_catches_wrapper_and_positional_tempfile(tmp_path):
+    from check_encoding_hygiene import check_file
+
+    violations = {
+        "wrapper_missing.py": "import io\nio.TextIOWrapper(stream)\n",
+        "wrapper_non_utf8.py": (
+            "import io\nio.TextIOWrapper(stream, encoding='latin-1')\n"
+        ),
+        "temporary_file.py": (
+            "import tempfile\ntempfile.TemporaryFile('w+t')\n"
+        ),
+        "named_temporary_file.py": (
+            "import tempfile\ntempfile.NamedTemporaryFile('w+t')\n"
+        ),
+    }
+    for name, source in violations.items():
+        path = tmp_path / name
+        path.write_text(source, encoding="utf-8")
+        assert {
+            violation.rule for violation in check_file(path, root=tmp_path)
+        } == {"text-file"}
+
+
+def test_recorder_stdin_reads_non_ascii_utf8(repo, tmp_path):
+    sign_off(repo)
+    intake(repo)
+    code, out = save_plan(repo, tmp_path)
+    assert code == 0, out
+    payload = json.loads(json.dumps(DECOMP))
+    payload["tasks"][0]["title"] = "Unicode arrow → snowman ☃"
+    env = {**os.environ, "PYTHONIOENCODING": "ascii:strict", "PYTHONUTF8": "0"}
+
+    proc = subprocess.run(
+        [sys.executable, str(
+            repo / "factory" / "scripts" / "record_decomposition_from_json.py"
+        )],
+        cwd=repo,
+        input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        capture_output=True,
+        env=env,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    recorded = json.loads(
+        (repo / ".factory" / "decomposition.json").read_text(encoding="utf-8")
+    )
+    assert recorded["tasks"][0]["title"] == payload["tasks"][0]["title"]
+
+
+def test_read_stdin_utf8_does_not_close_shared_buffer(monkeypatch):
+    import io
+    from factory_lib import read_stdin_utf8
+
+    stream = io.TextIOWrapper(io.BytesIO("first →".encode("utf-8")))
+    monkeypatch.setattr(sys, "stdin", stream)
+
+    assert read_stdin_utf8() == "first →"
+    assert read_stdin_utf8() == ""
+    assert not sys.stdin.buffer.closed
 
 
 # ---------------------------------------------------------- sign-off gating
@@ -1651,6 +1870,7 @@ def test_upgrade_survives_a_repo_without_harness_yaml(repo, tmp_path):
 def test_upgrade_replaces_machinery_preserves_project(repo, tmp_path):
     # Degrade machinery, add project-owned content + a proposed skill
     (repo / "factory" / "scripts" / "verify.py").unlink()
+    (repo / "factory" / "scripts" / "check_encoding_hygiene.py").unlink()
     proposed = repo / "factory" / "skills" / "proposed"
     proposed.mkdir(parents=True, exist_ok=True)
     (proposed / "keep-me.md").write_text("status: proposed\n")
@@ -1666,6 +1886,7 @@ def test_upgrade_replaces_machinery_preserves_project(repo, tmp_path):
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert (repo / "factory" / "scripts" / "verify.py").exists()  # machinery restored
+    assert (repo / "factory" / "scripts" / "check_encoding_hygiene.py").exists()
     assert (proposed / "keep-me.md").exists()  # evolution state preserved
     assert "Client-specific fact" in memory.read_text()  # project memory preserved
     assert list((repo / "docs" / "decisions").glob("*keep-decision.md"))  # project-owned untouched
@@ -2232,6 +2453,27 @@ def test_dual_runtime_linter_clean_on_scaffold_and_catches_phantom_ref(repo):
     )
     code, out = run(repo, "check_dual_runtime.py", str(repo))
     assert code != 0 and "phantom" in out
+
+
+def test_dual_runtime_replace_decodes_tracked_source_suffix(repo):
+    binary = repo / "vendor.js"
+    binary.write_bytes(b"\xff\x00binary")
+    git(repo, "add", "vendor.js")
+
+    code, out = run(repo, "check_dual_runtime.py", str(repo))
+
+    assert code == 0, out
+
+    latin1 = repo / "legacy.js"
+    latin1.write_bytes(
+        "// caf\N{LATIN SMALL LETTER E WITH ACUTE}\n"
+        "import '../prototype/utils';\n".encode("latin-1")
+    )
+    git(repo, "add", "legacy.js")
+
+    code, out = run(repo, "check_dual_runtime.py", str(repo))
+
+    assert code != 0 and "legacy.js:2 imports from prototype/" in out
 
 
 def _route_fixture_hooks_through_forge(repo: Path) -> None:
@@ -3425,6 +3667,112 @@ def test_fast_status_python_requires_path_resolvable_interpreter(
     assert "python >= 3.10" in required_missing
 
 
+def test_doctor_psutil_row_required_and_fix_installs(tmp_path, monkeypatch):
+    from forge_cli import doctor
+
+    with monkeypatch.context() as broken:
+        broken.setattr(
+            doctor.subprocess, "run",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("fast_status must not spawn a subprocess")
+            ),
+        )
+        broken.setattr(
+            doctor.importlib.util, "find_spec",
+            lambda name: object() if name == "psutil" else None,
+        )
+        broken.setattr(
+            doctor.importlib, "import_module",
+            lambda _name: (_ for _ in ()).throw(OSError("broken psutil ABI")),
+        )
+        assert "psutil" not in doctor.fast_status(tmp_path)[0]
+        broken_row = doctor._psutil_check()
+        assert broken_row["required"] and not broken_row["ok"]
+        assert "broken psutil ABI" in broken_row["detail"]
+
+    installed = {"psutil": False}
+    commands = []
+    refreshed_sites = []
+    monkeypatch.setattr(
+        doctor.subprocess, "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fast_status must not spawn a subprocess")
+        ),
+    )
+    monkeypatch.setattr(
+        doctor.importlib.util, "find_spec",
+        lambda name: object() if name == "psutil" and installed["psutil"] else None,
+    )
+    monkeypatch.setattr(
+        doctor, "_psutil_import_status",
+        lambda: (
+            (True, f"importable by {sys.executable}")
+            if installed["psutil"] else (False, "import failed: ModuleNotFoundError")
+        ),
+    )
+    monkeypatch.setattr(doctor.sys, "prefix", "/system-python")
+    monkeypatch.setattr(doctor.sys, "base_prefix", "/system-python")
+    monkeypatch.setattr(
+        doctor.site, "getusersitepackages", lambda: "/user/site-packages",
+    )
+    monkeypatch.setattr(doctor.site, "addsitedir", refreshed_sites.append)
+    monkeypatch.setattr(
+        doctor.importlib, "invalidate_caches",
+        lambda: refreshed_sites.append("caches-invalidated"),
+    )
+
+    required_missing, _ = doctor.fast_status(tmp_path)
+    assert "psutil" in required_missing
+    missing_row = doctor._psutil_check()
+    assert missing_row["required"] and not missing_row["ok"]
+    assert "pip install psutil" in missing_row["fix"]
+
+    def install(argv, **_kwargs):
+        commands.append(argv)
+        installed["psutil"] = True
+        return 0, "installed"
+
+    monkeypatch.setattr(doctor, "run_quiet", install)
+    row = doctor._psutil_check(fix=True)
+
+    assert row["ok"] and row["detail"] == f"importable by {sys.executable}"
+    assert commands == [[
+        sys.executable, "-m", "pip", "install", "--user", "psutil",
+    ]]
+    assert refreshed_sites == ["/user/site-packages", "caches-invalidated"]
+    assert "psutil" not in doctor.fast_status(tmp_path)[0]
+    assert row["required"] and row["ok"]
+
+    commands.clear()
+    installed["psutil"] = False
+    monkeypatch.setattr(doctor.sys, "prefix", "/project/.venv")
+    monkeypatch.setattr(doctor.sys, "base_prefix", "/system-python")
+    row = doctor._psutil_check(fix=True)
+    assert row["ok"]
+    assert commands == [[sys.executable, "-m", "pip", "install", "psutil"]]
+    assert refreshed_sites == ["/user/site-packages", "caches-invalidated"]
+
+    commands.clear()
+    installed["psutil"] = False
+    monkeypatch.setattr(doctor.sys, "prefix", "/system-python")
+    monkeypatch.setattr(doctor.sys, "base_prefix", "/system-python")
+
+    def externally_managed(argv, **_kwargs):
+        commands.append(argv)
+        return 1, "error: externally-managed-environment"
+
+    monkeypatch.setattr(
+        doctor, "run_quiet", externally_managed,
+    )
+    row = doctor._psutil_check(fix=True)
+    assert not row["ok"] and "externally managed" in row["detail"]
+    assert "pip install psutil" in row["fix"]
+    assert commands == [[
+        sys.executable, "-m", "pip", "install", "--user", "psutil",
+    ]]
+    assert "--break-system-packages" not in commands[0]
+
+
 def test_doctor_python_row_probes_working_windows_store_alias(tmp_path, monkeypatch):
     from forge_cli import doctor
 
@@ -4490,6 +4838,7 @@ def test_adopt_vendors_harness_and_preserves_project(tmp_path):
     assert code == 0, out
     # machinery is in; project content untouched; their CI survived the merge
     assert (repo / "factory" / "scripts" / "forge.py").exists()
+    assert (repo / "factory" / "scripts" / "check_encoding_hygiene.py").exists()
     assert (repo / "src" / "app.js").read_text() == "console.log('prototype')\n"
     # project README preserved, onboarding section appended (never rewritten)
     readme = (repo / "README.md").read_text()
@@ -4498,6 +4847,7 @@ def test_adopt_vendors_harness_and_preserves_project(tmp_path):
     assert (repo / ".github" / "workflows" / "their-ci.yml").exists()
     # harness factory workflow delivered alongside the preserved project one
     assert (repo / ".github" / "workflows" / "factory-scaffold.yml").exists()
+    assert "--with psutil" in (repo / ".envrc").read_text()
     # old CLAUDE.md preserved for harvest; shim installed
     kept = repo / "docs" / "context" / "migrated-CLAUDE.md"
     assert kept.exists() and "tabs" in kept.read_text()
@@ -4662,11 +5012,13 @@ def test_scaffold_delivers_factory_workflows(repo):
     assert (wf / "gardener.yml").exists()
     assert (wf / "harness-health.yml").exists()
     assert (wf / "roadmap-gate.yml").exists()
+    assert (repo / "factory/scripts/check_encoding_hygiene.py").exists()
 
 
 def test_scaffold_pins_gstack_into_the_repo(repo):
     envrc = repo / ".envrc"
     assert envrc.exists() and 'GSTACK_HOME="$PWD/.gstack"' in envrc.read_text()
+    assert "--with psutil" in envrc.read_text()
     attrs = repo / ".gitattributes"
     # union, git's built-in: a scaffolded repo must not inherit a rule that
     # depends on a per-clone hook having run wherever the merge happens.
@@ -4731,6 +5083,7 @@ def test_upgrade_delivers_gstack_setup_to_older_scaffolds(repo):
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert 'GSTACK_HOME="$PWD/.gstack"' in (repo / ".envrc").read_text()
+    assert "--with psutil" in (repo / ".envrc").read_text()
     assert "merge=union" in (repo / ".gitattributes").read_text()
     assert not jsonl_append_rules((repo / ".gitattributes").read_text())
     # The marker-keyed block: machine noise ignored, projects/ committable.
@@ -6974,6 +7327,27 @@ def test_trailer_check_targets_the_acceptance_commit(repo):
 
 # ---------------------------------------------------------- Gate A: PR ticket
 
+def test_ci_locale_forcing_selectors_reference_existing_tests():
+    workflow = (
+        HARNESS / ".github" / "workflows" / "factory-scaffold.yml"
+    ).read_text()
+    suite = ast.parse(
+        (HARNESS / "factory" / "tests" / "test_gates.py").read_text()
+    )
+    test_ids = {
+        node.name
+        for node in suite.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    selectors = set(re.findall(
+        r"factory/tests/test_gates\.py::([A-Za-z_][A-Za-z0-9_]*)",
+        workflow,
+    ))
+
+    assert selectors
+    assert not selectors - test_ids
+
+
 def test_roadmap_gate_workflow_shape():
     workflow = (HARNESS / ".github" / "workflows" / "roadmap-gate.yml").read_text()
     pr_job, coverage_job = workflow.split("\n  coverage:\n", 1)
@@ -7872,45 +8246,98 @@ def test_ship_archives_the_plan_grill_not_the_project_grills(repo, tmp_path):
     assert not (history / "grills" / "signoff.json").exists()
 
 
-def test_tagged_process_scan_skips_unreadable_environments(tmp_path):
-    """The /proc scan must SKIP a process whose environ it cannot read, not
-    abort the gate.
-
-    Linux refuses /proc/<pid>/environ for a zombie (ptrace_may_access fails on
-    an exited task) and for any process we do not own. Our own short-lived
-    proof children become zombies routinely, so raising there took down every
-    stage-done and delegate gate on Linux — while macOS, which has no /proc,
-    never ran the branch at all and stayed green. proc_root is injectable so
-    this case is reachable from either platform.
-    """
+def test_tagged_process_scan_skips_unreadable_environments(monkeypatch):
+    """An unreadable environment falls back without aborting the sweep."""
     sys.path.insert(0, str(HARNESS / "factory" / "scripts"))
-    from forge_cli.delegate import _tagged_processes
+    import forge_cli.delegate as delegate
 
-    token = "gate-test-token"
-    fake_proc = tmp_path / "proc"
-    fake_proc.mkdir()
+    class Process:
+        def __init__(self, pid, environ, command):
+            self.pid = pid
+            self._environ = environ
+            self._command = command
 
-    # Unreadable environ, exactly as Linux reports for a zombie or a process
-    # belonging to somebody else.
-    unreadable = fake_proc / "424242"
-    unreadable.mkdir()
-    (unreadable / "environ").write_bytes(b"")
-    (unreadable / "environ").chmod(0o000)
+        def username(self):
+            return "owner"
 
-    # A readable, genuinely live process carrying the marker: this one must
-    # still be found, so the skip above cannot be hiding real work.
-    mine = fake_proc / str(os.getpid())
-    mine.mkdir()
-    (mine / "environ").write_bytes(
-        b"PATH=/usr/bin\0FORGE_PROCESS_TOKEN=" + token.encode() + b"\0")
+        def environ(self):
+            if self._environ is None:
+                raise FakePsutilAccessDenied()
+            return self._environ
 
-    table = {424242: (1, "start-a"), os.getpid(): (1, "start-b")}
-    found = _tagged_processes(token, current=table, proc_root=fake_proc)
+        def cmdline(self):
+            if self._command is None:
+                raise FakePsutilAccessDenied()
+            return self._command
 
-    assert os.getpid() in found, "a readable tagged process must still be found"
-    assert 424242 not in found
+        def create_time(self):
+            return float(self.pid)
 
-    (unreadable / "environ").chmod(0o600)  # let tmp_path clean up
+    unreadable = Process(101, None, None)
+    readable = Process(202, {"FORGE_PROCESS_TOKEN": "owned"}, [])
+    monkeypatch.setattr(
+        delegate, "_psutil", lambda: fake_psutil([unreadable, readable]))
+
+    found = delegate._tagged_processes(
+        "owned", current={101: (1, 101.0), 202: (1, 202.0)})
+
+    assert found == {202: 202.0}
+
+
+def test_delegate_process_model_uses_psutil_not_ps():
+    source = (HARNESS / "factory/scripts/forge_cli/delegate.py").read_text()
+    tree = ast.parse(source)
+
+    top_level_psutil_imports = [
+        node for node in tree.body
+        if isinstance(node, (ast.Import, ast.ImportFrom))
+        and (
+            any(alias.name == "psutil" for alias in getattr(node, "names", []))
+            or getattr(node, "module", None) == "psutil"
+        )
+    ]
+    forbidden_calls = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "os"
+        and node.func.attr == "killpg"
+    ]
+    ps_subprocesses = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "subprocess"
+        and node.func.attr in {"run", "Popen"}
+        and node.args
+        and isinstance(node.args[0], (ast.List, ast.Tuple))
+        and node.args[0].elts
+        and isinstance(node.args[0].elts[0], ast.Constant)
+        and node.args[0].elts[0].value == "ps"
+    ]
+
+    assert top_level_psutil_imports == []
+    assert forbidden_calls == []
+    assert ps_subprocesses == []
+    assert "process_iter" in source
+    assert "children(recursive=True)" in source
+
+
+def test_delegate_import_does_not_require_psutil():
+    script = (
+        "import builtins,sys; "
+        "real=builtins.__import__; "
+        "builtins.__import__=lambda name,*a,**k: "
+        "(_ for _ in ()).throw(ModuleNotFoundError(name)) "
+        "if name=='psutil' else real(name,*a,**k); "
+        f"sys.path.insert(0,{str(HARNESS / 'factory/scripts')!r}); "
+        "from forge_cli import delegate"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_frontier_is_ranked_by_what_it_unblocks(repo, tmp_path):
@@ -9175,20 +9602,7 @@ def fake_companion_home(tmp_path: Path) -> Path:
 
 
 def fake_companion_env(tmp_path: Path) -> dict[str, str]:
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir(exist_ok=True)
-    fake_ps = fake_bin / "ps"
-    fake_ps.write_text(
-        "#!/bin/sh\n"
-        "if [ \"$2\" = \"lstart=\" ]; then\n"
-        "  echo 'Thu Aug 7 00:00:00 2026'\n"
-        "fi\n"
-    )
-    fake_ps.chmod(0o755)
-    return {
-        "HOME": str(fake_companion_home(tmp_path)),
-        "PATH": f"{fake_bin}:{os.environ['PATH']}",
-    }
+    return {"HOME": str(fake_companion_home(tmp_path))}
 
 
 def launch_fake(repo: Path, tmp_path: Path, stage_id: str) -> None:
@@ -9849,39 +10263,6 @@ def test_stage_done_termination_signal_reaps_active_proof(
         os.kill(child_pid, 0)
 
 
-def test_process_identity_matches_the_process_table_on_single_digit_days(
-        repo, monkeypatch):
-    # `ps -o lstart=` pads the day of month to width two ("Aug  4"), while
-    # _process_table rebuilds identity with " ".join(fields) and collapses it.
-    # Every identity comparison in the module pits one form against the other,
-    # so an unnormalized probe matches nothing on days 1-9 — no observed
-    # process is recognized as live, none is signalled, and proof trees
-    # survive. It passed on 2026-07-30 and failed on 2026-08-04 for that
-    # reason alone. Assert the two forms agree for a live process.
-    sys.path.insert(0, str(repo / "factory" / "scripts"))
-    try:
-        import forge_cli.delegate as delegate
-
-        def fake_ps(args, **_kwargs):
-            if args[1:3] == ["-o", "lstart="]:
-                return subprocess.CompletedProcess(
-                    args, 0, stdout="Mon Aug  4 10:11:12 2026\n", stderr="")
-            return subprocess.CompletedProcess(
-                args, 0,
-                stdout="101 1 Mon Aug 4 10:11:12 2026\n", stderr="")
-
-        monkeypatch.setattr(delegate.subprocess, "run", fake_ps)
-        probed = delegate._process_start_identity(101)
-        tabled = delegate._process_table().get(101)
-        assert probed is not None and tabled is not None
-        assert probed == tabled[1], (
-            f"identity forms disagree: probe={probed!r} table={tabled[1]!r}")
-        assert "  " not in probed
-    finally:
-        sys.path.remove(str(repo / "factory" / "scripts"))
-        sys.modules.pop("forge_cli.delegate", None)
-
-
 @pytest.mark.parametrize("proof_kind", ["verify-command", "required-test"])
 def test_proof_reaps_spawn_when_process_identity_probe_fails(
         repo, monkeypatch, proof_kind):
@@ -9907,15 +10288,25 @@ def test_proof_reaps_spawn_when_process_identity_probe_fails(
         fake_process = FakeProcess()
         cleaned = []
         signals = []
-        monkeypatch.setattr(stages.subprocess, "Popen",
-                            lambda *_args, **_kwargs: fake_process)
+        spawned = {}
+        probes = iter([OSError("process identity unavailable"), 4242.0])
+
+        def process_identity(_pid):
+            result = next(probes)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        def spawn(*_args, **kwargs):
+            spawned.update(kwargs)
+            return fake_process
+
+        monkeypatch.setattr(stages.subprocess, "Popen", spawn)
         monkeypatch.setattr(delegate, "_process_table", lambda: {})
+        monkeypatch.setattr(delegate, "_process_start_identity", process_identity)
         monkeypatch.setattr(
-            delegate, "_process_start_identity",
-            lambda _pid: (_ for _ in ()).throw(OSError("ps unavailable")))
-        monkeypatch.setattr(
-            delegate.os, "killpg",
-            lambda pgid, signum: signals.append((pgid, signum)))
+            delegate, "_signal_verified_process_group",
+            lambda pid, identity: signals.append((pid, identity)) or True)
         monkeypatch.setattr(
             delegate, "_terminate_observed_process_tree",
             lambda proc, *_args: cleaned.append(proc.pid) or True)
@@ -9938,7 +10329,12 @@ def test_proof_reaps_spawn_when_process_identity_probe_fails(
     finally:
         sys.path.pop(0)
     assert cleaned == [fake_process.pid]
-    assert signals == [(fake_process.pid, signal.SIGTERM)]
+    assert signals == [(fake_process.pid, 4242.0)]
+    assert spawned["env"]["PYTHONUTF8"] == "1"
+    assert spawned["stdout"].encoding == "utf-8"
+    assert spawned["stdout"].errors == "replace"
+    assert spawned["stderr"].encoding == "utf-8"
+    assert spawned["stderr"].errors == "replace"
 
 
 def test_stage_done_reloads_launch_after_proof_commands(repo, tmp_path):
@@ -11161,6 +11557,48 @@ def test_delegate_brief_symlink_is_refused(
     assert victim.read_text() == "do not touch\n"
 
 
+def test_safe_factory_windows_helper_opens_nested_regular_file(tmp_path):
+    factory_lib = load_factory_lib(HARNESS)
+    target = tmp_path / ".factory"
+    descriptor = factory_lib._safe_factory_nt_open(
+        target, ("briefs", "T1.md"), os.O_WRONLY | os.O_CREAT)
+    assert descriptor is not None
+    try:
+        os.write(descriptor, b"brief\n")
+    finally:
+        os.close(descriptor)
+    assert (target / "briefs" / "T1.md").read_bytes() == b"brief\n"
+
+
+@pytest.mark.parametrize("parts, reparse_relative", [
+    (("T1.md",), "."),
+    (("T1.md",), "T1.md"),
+    (("briefs", "T1.md"), "briefs"),
+])
+def test_safe_factory_windows_helper_refuses_reparse_components(
+        tmp_path, monkeypatch, parts, reparse_relative):
+    factory_lib = load_factory_lib(HARNESS)
+    target = tmp_path / ".factory"
+    reparse_path = target / reparse_relative
+    if reparse_relative == parts[-1]:
+        target.mkdir()
+        reparse_path.touch()
+    real_lstat = factory_lib.os.lstat
+    reparse_flag = 0x400
+    monkeypatch.setattr(
+        factory_lib.stat, "FILE_ATTRIBUTE_REPARSE_POINT", reparse_flag,
+        raising=False)
+
+    def lstat(path):
+        if os.fspath(path) == os.fspath(reparse_path):
+            return types.SimpleNamespace(st_file_attributes=reparse_flag)
+        return real_lstat(path)
+
+    monkeypatch.setattr(factory_lib.os, "lstat", lstat)
+    assert factory_lib._safe_factory_nt_open(
+        target, parts, os.O_WRONLY | os.O_CREAT) is None
+
+
 def test_delegate_mirror_symlink_is_ignored(repo, tmp_path):
     start_stage(repo, tmp_path, STAGE_TASK, launch=False)
     victim = repo / "victim.txt"
@@ -11324,22 +11762,70 @@ def test_process_signal_revalidates_each_pid_identity(repo, monkeypatch):
     sys.path.insert(0, str(repo / "factory" / "scripts"))
     try:
         import forge_cli.delegate as delegate
-        killed = []
+        terminated = []
+
+        class Process:
+            def __init__(self, pid, identity):
+                self.pid = pid
+                self.identity = identity
+
+            def status(self):
+                return "running"
+
+            def create_time(self):
+                return self.identity
+
+            def terminate(self):
+                terminated.append(self.pid)
+
+        replacement = Process(101, 2.0)
+        live = Process(102, 3.0)
         monkeypatch.setattr(
-            delegate, "_process_start_identity",
-            lambda pid: "replacement" if pid == 101 else "live")
-        monkeypatch.setattr(delegate, "_process_is_zombie", lambda _pid: False)
-        monkeypatch.setattr(
-            delegate.os, "kill",
-            lambda pid, signum: killed.append((pid, signum)))
+            delegate, "_psutil", lambda: fake_psutil([replacement, live]))
         signalled = delegate._signal_identified_processes({
-            101: "original",
-            102: "live",
+            101: 1.0,
+            102: 3.0,
         })
     finally:
         sys.path.pop(0)
-    assert signalled == {102: "live"}
-    assert killed == [(102, signal.SIGTERM)]
+    assert signalled == {102: 3.0}
+    assert terminated == [102]
+
+
+def test_process_signal_uses_portable_sigkill(repo, monkeypatch):
+    sys.path.insert(0, str(repo / "factory" / "scripts"))
+    try:
+        import forge_cli.delegate as delegate
+        terminated = []
+        killed = []
+
+        class Process:
+            pid = 101
+
+            def status(self):
+                return "running"
+
+            def create_time(self):
+                return 1.0
+
+            def terminate(self):
+                terminated.append(self.pid)
+
+            def kill(self):
+                killed.append(self.pid)
+
+        monkeypatch.delattr(delegate.signal, "SIGKILL", raising=False)
+        monkeypatch.setattr(delegate, "SIGKILL", None)
+        monkeypatch.setattr(
+            delegate, "_psutil", lambda: fake_psutil([Process()]))
+        assert delegate._signal_identified_processes(
+            {101: 1.0}, signal.SIGTERM) == {101: 1.0}
+        assert delegate._signal_identified_processes(
+            {101: 1.0}, delegate.SIGKILL) == {101: 1.0}
+    finally:
+        sys.path.pop(0)
+    assert terminated == [101]
+    assert killed == [101]
 
 
 def test_process_signal_revalidates_identity_after_zombie_probe(
@@ -11347,86 +11833,112 @@ def test_process_signal_revalidates_identity_after_zombie_probe(
     sys.path.insert(0, str(repo / "factory" / "scripts"))
     try:
         import forge_cli.delegate as delegate
-        state = {"identity": "original"}
-        killed = []
-        monkeypatch.setattr(
-            delegate, "_process_start_identity",
-            lambda _pid: state["identity"])
+        state = {"identity": 1.0}
+        terminated = []
 
-        def probe_zombie(_pid):
-            state["identity"] = "replacement"
-            return False
+        class Process:
+            pid = 101
 
-        monkeypatch.setattr(delegate, "_process_is_zombie", probe_zombie)
+            def status(self):
+                state["identity"] = 2.0
+                return "running"
+
+            def create_time(self):
+                return state["identity"]
+
+            def terminate(self):
+                terminated.append(self.pid)
+
+        process = Process()
         monkeypatch.setattr(
-            delegate.os, "kill",
-            lambda pid, signum: killed.append((pid, signum)))
+            delegate, "_psutil", lambda: fake_psutil([process]))
         signalled = delegate._signal_identified_processes({
-            101: "original",
+            101: 1.0,
         })
     finally:
         sys.path.pop(0)
     assert signalled == {}
-    assert killed == []
+    assert terminated == []
 
 
-def test_process_group_signal_requires_live_leader_identity(
+def test_terminate_reaps_worker_tree_by_create_time_identity(
         repo, monkeypatch):
     sys.path.insert(0, str(repo / "factory" / "scripts"))
     try:
         import forge_cli.delegate as delegate
-        signals = []
-        monkeypatch.setattr(delegate, "_process_is_zombie", lambda _pid: False)
+        terminated = []
+
+        class Process:
+            def __init__(self, pid, identity, children=()):
+                self.pid = pid
+                self.identity = identity
+                self._children = list(children)
+
+            def status(self):
+                return "running"
+
+            def create_time(self):
+                return self.identity
+
+            def children(self, *, recursive):
+                assert recursive is True
+                return self._children
+
+            def terminate(self):
+                terminated.append(self.pid)
+
+        class ReusedChild(Process):
+            def __init__(self):
+                super().__init__(104, 41.0)
+                self.identities = iter((41.0, 42.0))
+
+            def create_time(self):
+                return next(self.identities)
+
+        child = Process(102, 20.0)
+        reused_child = ReusedChild()
+        leader = Process(101, 10.0, [child, reused_child])
+        reused = Process(103, 31.0)
         monkeypatch.setattr(
-            delegate, "_process_start_identity",
-            lambda pid: "leader" if pid == 101 else None)
-        monkeypatch.setattr(
-            delegate.os, "killpg",
-            lambda pgid, signum: signals.append((pgid, signum)))
-        assert delegate._signal_verified_process_group(101, "leader") is True
-        assert delegate._signal_verified_process_group(102, "old") is False
+            delegate, "_psutil",
+            lambda: fake_psutil([leader, child, reused_child, reused]))
+
+        assert delegate._signal_verified_process_group(101, 10.0) is True
+        assert delegate._signal_verified_process_group(103, 30.0) is False
     finally:
         sys.path.pop(0)
-    assert signals == [(101, signal.SIGTERM)]
-
-
-def test_process_table_failure_is_not_treated_as_an_empty_table(
-        repo, monkeypatch):
-    sys.path.insert(0, str(repo / "factory" / "scripts"))
-    try:
-        import forge_cli.delegate as delegate
-
-        class FailedPs:
-            returncode = 1
-            stdout = ""
-
-        monkeypatch.setattr(
-            delegate.subprocess, "run",
-            lambda *_args, **_kwargs: FailedPs())
-        with pytest.raises(delegate.ProcessDiscoveryError):
-            delegate._process_table()
-    finally:
-        sys.path.pop(0)
+    assert terminated == [102, 101]
 
 
 def test_tagged_process_scan_is_limited_to_same_user_processes(
-        repo, tmp_path, monkeypatch):
+        repo, monkeypatch):
     sys.path.insert(0, str(repo / "factory" / "scripts"))
     try:
         import forge_cli.delegate as delegate
-        real_path = Path
-        proc_root = tmp_path / "proc"
-        for pid in ("101", "202"):
-            (proc_root / pid).mkdir(parents=True)
-        (proc_root / "101" / "environ").write_bytes(b"OTHER=value\0")
-        (proc_root / "202" / "environ").write_bytes(
-            b"FORGE_PROCESS_TOKEN=owned\0")
+        class Process:
+            def __init__(self, pid, user, environment):
+                self.pid = pid
+                self.user = user
+                self._environment = environment
+
+            def username(self):
+                return self.user
+
+            def environ(self):
+                return self._environment
+
+            def cmdline(self):
+                return []
+
+            def create_time(self):
+                return float(self.pid)
+
+        mine = Process(101, "owner", {})
+        other = Process(202, "other", {"FORGE_PROCESS_TOKEN": "owned"})
         monkeypatch.setattr(
-            delegate, "Path",
-            lambda value: proc_root if value == "/proc" else real_path(value))
-        monkeypatch.setattr(
-            delegate, "_process_table", lambda: {101: (1, "same-user")})
-        found = delegate._tagged_processes("owned")
+            delegate, "_psutil", lambda: fake_psutil([mine, other]))
+        found = delegate._tagged_processes(
+            "owned", current={101: (1, 101.0), 202: (1, 202.0)})
     finally:
         sys.path.pop(0)
     assert found == {}
@@ -11437,39 +11949,68 @@ def test_tagged_process_scan_skips_permission_denied_candidates(
     sys.path.insert(0, str(repo / "factory" / "scripts"))
     try:
         import forge_cli.delegate as delegate
-        real_path = Path
+        class Process:
+            def __init__(self, pid, environment, denied=False):
+                self.pid = pid
+                self._environment = environment
+                self.denied = denied
 
-        class Candidate:
-            def __init__(self, name):
-                self.name = name
+            def username(self):
+                return "owner"
 
-            def __truediv__(self, _name):
-                return self
+            def environ(self):
+                if self.denied:
+                    raise FakePsutilAccessDenied()
+                return self._environment
 
-            def read_bytes(self):
-                if self.name == "101":
-                    raise PermissionError("hidden process environment")
-                return b"FORGE_PROCESS_" + b"TOKEN=owned\0"
+            def cmdline(self):
+                if self.denied:
+                    raise FakePsutilAccessDenied()
+                return []
 
-        class ProcRoot:
-            def is_dir(self):
-                return True
+            def create_time(self):
+                return float(self.pid)
 
-            def __truediv__(self, pid):
-                return Candidate(str(pid))
-
+        hidden = Process(101, None, denied=True)
+        readable = Process(202, {"FORGE_PROCESS_TOKEN": "owned"})
         monkeypatch.setattr(
-            delegate, "Path",
-            lambda value: ProcRoot() if value == "/proc" else real_path(value))
-        monkeypatch.setattr(
-            delegate, "_process_table",
-            lambda: {101: (1, "hidden"), 202: (1, "readable")})
-        monkeypatch.setattr(
-            delegate, "_process_start_identity", lambda pid: f"identity-{pid}")
-        found = delegate._tagged_processes("owned")
+            delegate, "_psutil", lambda: fake_psutil([hidden, readable]))
+        found = delegate._tagged_processes(
+            "owned", current={101: (1, 101.0), 202: (1, 202.0)})
     finally:
         sys.path.pop(0)
-    assert found == {202: "identity-202"}
+    assert found == {202: 202.0}
+
+
+def test_tagged_process_scan_falls_back_when_cached_environment_is_denied(
+        repo, monkeypatch):
+    sys.path.insert(0, str(repo / "factory" / "scripts"))
+    try:
+        import forge_cli.delegate as delegate
+
+        class Process:
+            pid = 101
+
+            def username(self):
+                return "owner"
+
+            def environ(self):
+                raise FakePsutilAccessDenied()
+
+            def cmdline(self):
+                return ["worker", "FORGE_PROCESS_TOKEN=owned"]
+
+            def create_time(self):
+                return 101.0
+
+        process = Process()
+        monkeypatch.setattr(
+            delegate, "_psutil", lambda: fake_psutil([process]))
+        found = delegate._tagged_processes(
+            "owned", current={101: (1, 101.0)})
+    finally:
+        sys.path.pop(0)
+    assert found == {101: 101.0}
 
 
 def test_live_process_identity_probe_failure_is_not_treated_as_exit(
@@ -11493,7 +12034,8 @@ def test_process_cleanup_fails_when_discovery_is_unavailable(
         import forge_cli.delegate as delegate
 
         def unavailable():
-            raise delegate.ProcessDiscoveryError("ps unavailable")
+            raise delegate.ProcessDiscoveryError(
+                "process discovery unavailable")
 
         stopped = delegate._terminate_processes_until_quiet(
             {}, unavailable)
@@ -11512,7 +12054,8 @@ def test_process_cleanup_reaps_known_process_when_discovery_fails(
         signals = []
 
         def unavailable():
-            raise delegate.ProcessDiscoveryError("ps unavailable")
+            raise delegate.ProcessDiscoveryError(
+                "process discovery unavailable")
 
         def signal_processes(processes, signum=signal.SIGTERM):
             signals.extend((pid, signum) for pid in processes)
@@ -11556,9 +12099,9 @@ def test_immediate_cleanup_signals_owned_group_before_discovery(
 
         def unavailable():
             events.append("discover")
-            raise delegate.ProcessDiscoveryError("ps unavailable")
+            raise delegate.ProcessDiscoveryError("process discovery unavailable")
 
-        monkeypatch.setattr(delegate, "_process_table", unavailable)
+        monkeypatch.setattr(delegate, "_descendants", lambda _pid: unavailable())
         monkeypatch.setattr(
             delegate, "_signal_verified_process_group",
             lambda _pid, _identity: events.append("signal") or True)
@@ -11654,6 +12197,7 @@ def test_wait_reuses_process_table_snapshot_for_tag_discovery(
             return {}
 
         monkeypatch.setattr(delegate, "_process_table", process_table)
+        monkeypatch.setattr(delegate, "_descendants", lambda _pid: {})
         monkeypatch.setattr(delegate, "_tagged_processes", tagged)
         monkeypatch.setattr(
             delegate, "_terminate_tagged_processes",
@@ -11732,6 +12276,56 @@ def test_delegate_reaps_spawn_when_running_registration_fails(
     ]
 
 
+@pytest.mark.parametrize("platform", ("posix", "nt"))
+def test_launch_companion_uses_platform_specific_spawn_options(
+        repo, tmp_path, monkeypatch, platform):
+    sys.path.insert(0, str(repo / "factory" / "scripts"))
+    try:
+        import forge_cli.delegate as delegate
+        captured = {}
+
+        class Process:
+            pid = 101
+            returncode = 0
+
+        def spawn(_argv, **kwargs):
+            captured.update(kwargs)
+            return Process()
+
+        monkeypatch.setattr(delegate.os, "name", platform)
+        monkeypatch.setattr(
+            delegate.subprocess, "CREATE_NEW_PROCESS_GROUP", 1,
+            raising=False)
+        monkeypatch.setattr(delegate, "append_delegation", lambda *_args: None)
+        monkeypatch.setattr(
+            delegate, "safe_factory_write_bytes", lambda *_args, **_kwargs: True)
+        monkeypatch.setattr(delegate, "sha256_of", lambda _path: "digest")
+        monkeypatch.setattr(delegate, "companion_script", lambda: tmp_path / "x")
+        monkeypatch.setattr(delegate.shutil, "which", lambda _name: "node")
+        monkeypatch.setattr(delegate, "_process_table", lambda: {})
+        monkeypatch.setattr(delegate, "_capture_spawn_identity", lambda _proc: 1.0)
+        monkeypatch.setattr(delegate, "_wait_and_reap", lambda *_args: True)
+        monkeypatch.setattr(delegate.subprocess, "Popen", spawn)
+        delegate.launch_companion(
+            repo, task_id="T1", text="brief", path=repo / ".factory" / "x.md",
+            task_sha256_value="digest", model="model", effort="effort",
+            write=False,
+        )
+    finally:
+        sys.path.pop(0)
+    if platform == "nt":
+        assert captured["creationflags"] == 1
+        assert "preexec_fn" not in captured
+    else:
+        assert captured["start_new_session"] is True
+        assert captured["preexec_fn"] is delegate.unblock_termination_signals_in_child
+    assert captured["env"]["PYTHONUTF8"] == "1"
+    assert captured["stdout"].encoding == "utf-8"
+    assert captured["stdout"].errors == "replace"
+    assert captured["stderr"].encoding == "utf-8"
+    assert captured["stderr"].errors == "replace"
+
+
 def test_stale_launch_reconciliation_refuses_unverified_process_group(
         repo, monkeypatch, capsys):
     sys.path.insert(0, str(repo / "factory" / "scripts"))
@@ -11743,6 +12337,8 @@ def test_stale_launch_reconciliation_refuses_unverified_process_group(
         }
         monkeypatch.setattr(delegate, "load_delegations", lambda _base: [entry])
         monkeypatch.setattr(delegate, "_pid_alive", lambda _pid: False)
+        monkeypatch.setattr(
+            delegate, "_terminate_tagged_processes", lambda _token: True)
         monkeypatch.setattr(delegate, "_process_group_alive", lambda _pgid: True)
         with pytest.raises(SystemExit):
             delegate._reconcile_stale_launches(repo, "T1")
@@ -11759,15 +12355,17 @@ def test_stale_launch_reconciliation_does_not_signal_a_reused_pid(
         entry = {
             "task": "T1", "write": True, "launch_id": "old",
             "launch_status": "running", "pid": 123, "pgid": 123,
-            "pid_started": "Mon Jul 27 10:00:00 2026",
+            "pid_started": "10.0",
         }
         recorded = []
         monkeypatch.setattr(delegate, "load_delegations", lambda _base: [entry])
         monkeypatch.setattr(delegate, "_pid_alive", lambda _pid: True)
         monkeypatch.setattr(
             delegate, "_process_start_identity",
-            lambda _pid: "Tue Jul 28 10:00:00 2026",
+            lambda _pid: 11.0,
         )
+        monkeypatch.setattr(
+            delegate, "_terminate_tagged_processes", lambda _token: True)
         monkeypatch.setattr(
             delegate, "append_delegation",
             lambda _base, record: recorded.append(record),
@@ -11776,6 +12374,31 @@ def test_stale_launch_reconciliation_does_not_signal_a_reused_pid(
     finally:
         sys.path.pop(0)
     assert recorded[-1]["launch_status"] == "failed"
+
+
+def test_stale_launch_reconciliation_preserves_live_legacy_identity(
+        repo, monkeypatch, capsys):
+    sys.path.insert(0, str(repo / "factory" / "scripts"))
+    try:
+        import forge_cli.delegate as delegate
+        entry = {
+            "task": "T1", "write": True, "launch_id": "old",
+            "launch_status": "running", "pid": 123, "pgid": 123,
+            "pid_started": "Mon Aug 12 10:00:00 2024",
+        }
+        reaped = []
+        monkeypatch.setattr(delegate, "load_delegations", lambda _base: [entry])
+        monkeypatch.setattr(delegate, "_pid_alive", lambda _pid: True)
+        monkeypatch.setattr(delegate, "_process_start_identity", lambda _pid: 10.0)
+        monkeypatch.setattr(
+            delegate, "_terminate_tagged_processes",
+            lambda _token: reaped.append(_token) or True)
+        with pytest.raises(SystemExit):
+            delegate._reconcile_stale_launches(repo, "T1")
+    finally:
+        sys.path.pop(0)
+    assert reaped == []
+    assert "already has a foreground delegation running" in capsys.readouterr().out
 
 
 def test_delegate_ignores_stale_lock_contents_when_no_process_holds_it(repo, tmp_path):
@@ -11816,7 +12439,7 @@ def test_protected_lock_path_rejects_unsafe_task_id(repo):
 
 @pytest.mark.skipif(
     os.name == "nt",
-    reason="POSIX only: process-group termination uses HUP/QUIT and killpg",
+    reason="POSIX only: wrapper termination also exercises HUP/QUIT",
 )
 @pytest.mark.parametrize("wrapper_signal", (
     [signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT]
@@ -11863,6 +12486,125 @@ def test_termination_signals_reap_companion_before_lock_release(
         sys.path.pop(0)
     terminal = json.loads(delegation_ledger(repo).read_text().splitlines()[-1])
     assert terminal["launch_status"] == "failed"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows process-group E2E")
+def test_windows_delegation_launches_and_reaps(repo, tmp_path):
+    import psutil
+
+    start_stage(repo, tmp_path, STAGE_TASK, launch=False)
+    home = fake_companion_home(tmp_path)
+    companion = next(home.glob(
+        ".claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs"))
+    companion.write_text(
+        "import { spawn } from 'node:child_process';\n"
+        "import { writeFileSync } from 'node:fs';\n"
+        "const child = spawn(process.execPath, ['-e', "
+        "'setInterval(() => {}, 1000)'], {stdio: 'ignore'});\n"
+        "writeFileSync('.factory/windows-worker.pid', String(child.pid));\n"
+        "setInterval(() => {}, 1000);\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, str(repo / "factory/scripts/forge.py"),
+         "delegate", "T1"],
+        cwd=repo,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "HOME": str(home), "USERPROFILE": str(home)},
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+    )
+    child_pid = 0
+    child_started = 0.0
+    try:
+        lock = delegation_lock(repo, "T1")
+        child_pid_path = repo / ".factory" / "windows-worker.pid"
+        latest = {}
+        for _ in range(200):
+            if lock.exists() and delegation_ledger(repo).exists():
+                latest = json.loads(
+                    delegation_ledger(repo).read_text().splitlines()[-1])
+                if (latest.get("launch_status") == "running"
+                        and child_pid_path.exists()):
+                    break
+            threading.Event().wait(0.05)
+        if latest.get("launch_status") != "running":
+            if proc.poll() is None:
+                proc.terminate()
+            out, err = proc.communicate(timeout=10)
+            assert lock.exists() and latest.get("launch_status") == "running", (
+                f"delegate never recorded running; stdout={out!r} stderr={err!r}")
+        assert lock.exists()
+        assert latest["argv"][-1] == "--write"
+        child_pid = int(child_pid_path.read_text())
+        child_started = psutil.Process(child_pid).create_time()
+
+        psutil.Process(latest["pid"]).terminate()
+        proc.communicate(timeout=20)
+        assert proc.returncode != 0
+
+        def child_is_alive() -> bool:
+            try:
+                child = psutil.Process(child_pid)
+                return (child.create_time() == child_started
+                        and child.is_running()
+                        and child.status() != psutil.STATUS_ZOMBIE)
+            except psutil.NoSuchProcess:
+                return False
+
+        for _ in range(100):
+            if not child_is_alive():
+                break
+            threading.Event().wait(0.05)
+        assert not child_is_alive()
+        sys.path.insert(0, str(repo / "factory" / "scripts"))
+        try:
+            from forge_cli.delegate import _lock_is_held
+            assert not _lock_is_held(lock)
+        finally:
+            sys.path.pop(0)
+        terminal = json.loads(
+            delegation_ledger(repo).read_text().splitlines()[-1])
+        assert terminal["launch_status"] == "failed"
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate(timeout=10)
+        if child_pid:
+            try:
+                child = psutil.Process(child_pid)
+                if child.create_time() == child_started:
+                    child.kill()
+            except psutil.NoSuchProcess:
+                pass
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows encoding E2E")
+def test_windows_delegation_success_round_trips_unicode_handoff(repo, tmp_path):
+    start_stage(repo, tmp_path, STAGE_TASK, launch=False)
+    home = fake_companion_home(tmp_path)
+    companion = next(home.glob(
+        ".claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs"))
+    companion.write_text(
+        "process.stdout.write('worker\\u2192handoff');\n"
+    )
+
+    proc = subprocess.run(
+        [sys.executable, str(repo / "factory/scripts/forge.py"),
+         "delegate", "T1"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env={**os.environ, "HOME": str(home), "USERPROFILE": str(home)},
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "worker→handoff" in proc.stdout
+    terminal = json.loads(
+        delegation_ledger(repo).read_text().splitlines()[-1])
+    assert terminal["launch_status"] == "succeeded"
+    assert terminal["argv"][-1] == "--write"
 
 
 def test_read_only_diagnostic_does_not_revoke_write_launch(repo, tmp_path):

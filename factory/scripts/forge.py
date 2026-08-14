@@ -46,8 +46,10 @@ from forge_cli import board as board_mod
 from forge_cli import codex_status
 from forge_cli import assumptions as assumptions_mod
 from forge_cli import context as ctx
+from forge_cli import delegate as delegate_mod
 from forge_cli import deferrals as deferrals_mod
 from forge_cli import findings as findings_mod
+from forge_cli import fix as fix_mod
 from forge_cli import lessons as lessons_mod
 from forge_cli import outcome as outcome_mod
 from forge_cli import project as project_mod
@@ -60,20 +62,6 @@ from forge_cli import gstack as gstack_mod
 from forge_cli import history as history_mod
 from forge_cli import signal as signal_mod
 from forge_cli import decisions, doctor, phase, plans, roadmap, scaffold, specs, team, upgrade
-
-if os.name == "nt":
-    delegate_mod = None
-    fix_mod = None
-else:
-    from forge_cli import delegate as delegate_mod
-    from forge_cli import fix as fix_mod
-
-
-def _posix_companion_only(_args: argparse.Namespace) -> None:
-    raise SystemExit(
-        "This companion command is not available natively on Windows yet; "
-        "run it under WSL2 or use the native non-delegating Forge commands."
-    )
 
 
 def main() -> None:
@@ -229,7 +217,7 @@ def main() -> None:
     p_fix = sub.add_parser("fix", help="launch a bounded fix in an open lite window")
     p_fix.add_argument("description")
     p_fix.add_argument("--repo")
-    p_fix.set_defaults(func=fix_mod.cmd_fix if fix_mod else _posix_companion_only)
+    p_fix.set_defaults(func=fix_mod.cmd_fix)
 
     p_spec = sub.add_parser("spec", help="capture and confirm capability specs")
     spec_sub = p_spec.add_subparsers(dest="spec_command", required=True)
@@ -449,9 +437,7 @@ def main() -> None:
     p_del.add_argument("--print-only", action="store_true",
                        help="print the argv without launching or recording evidence")
     p_del.add_argument("--repo")
-    p_del.set_defaults(
-        func=delegate_mod.cmd_delegate if delegate_mod else _posix_companion_only
-    )
+    p_del.set_defaults(func=delegate_mod.cmd_delegate)
 
     p_review_brief = sub.add_parser(
         "review-brief", help="compose the plan-contract prompt for autoreview")

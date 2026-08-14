@@ -13,12 +13,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 from factory_lib import (
     dump_json, head_sha, load_json, now_iso, repo_root, run_state_path,
-    sha256_of, validate_payload,
+    read_stdin_utf8, sha256_of, validate_payload,
 )
 
 VERDICTS = {"pass", "blocked"}
@@ -37,9 +36,9 @@ parser.add_argument("--task-digest", dest="task_digest",
 args = parser.parse_args()
 
 if args.input:
-    payload = json.loads(Path(args.input).read_text())
+    payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
 else:
-    raw = sys.stdin.read().strip()
+    raw = read_stdin_utf8().strip()
     if not raw:
         raise SystemExit("Expected JSON on stdin or via --input")
     payload = json.loads(raw)

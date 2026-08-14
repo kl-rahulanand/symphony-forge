@@ -1,0 +1,24 @@
+{
+  "generated_by": "griller",
+  "gate": "task",
+  "verdict": "pass",
+  "gaps": [
+    "Do the contract's file:line references (delegate.py:1055-1056, stages.py:855/945, factory_lib ~978) still hold on the post-#101/#102 merged main this stage builds on?",
+    "Does the new-file check_encoding_hygiene.py fall inside write_scope, and can verify_commands reference it before it exists?",
+    "Are both required tests POSIX-runnable (WIN-3 lesson: a skip counts as fail at stage done)?",
+    "Review round: do the seven autoreview findings (2 runtime bugs, 1 misclassification, 3 gate-strength gaps, 1 CI-wiring gap) belong to this stage's contract?"
+  ],
+  "contradictions": [],
+  "resolutions": [
+    "Line refs verified approximately stable on c32ee3d (factory_lib shifted ~+20 lines from #101's header block; the boundaries themselves are unchanged \u2014 run_quiet still locale-default, six temp-log handles present, stdin readers unchanged). Contract text says '~line' where drift matters; the worker locates by pattern, not offset.",
+    "write_scope entry 'factory/scripts' is a prefix covering the new checker; verify_commands run at stage done, after the file exists \u2014 same pattern as WIN-3's psutil rows.",
+    "Both required tests are plain-POSIX pytest nodes (hygiene-gate self-test, stdin round-trip); no platform skipifs. The nt glyph E2E belongs to ENC.2's CI selector only.",
+    "Six folded into the appended review-round AC with exact fixes (binary-safe dual_runtime scan, stdin wrapper detach, phase.py surrogateescape, non-strict errors policies, subprocess text input, stdin alias forms + consulted allowlist); the seventh (CI wiring) is ENC.2's task by design \u2014 parked in the AC text, no separate deferral needed since ENC.2's contract already carries it."
+  ],
+  "open_items": [],
+  "notes": "FORGE-WIN-ENC.1 contract interrogated against the approved plan (fresh at c32ee3d), decisions 0042/0043-draft, and the merged repo state. Review-round re-grill after the contract amendment (0023): the six in-scope findings land as an AC with named fixes; CI wiring confirmed as ENC.2 scope. Frontier empty.",
+  "task_id": "FORGE-WIN-ENC.1",
+  "input_sha256": "7ff066e0c443489791384ceaccac98f97f4eff464be1de68b76c597e4862079d",
+  "recorded_at": "2026-08-13T18:06:43+00:00",
+  "commit": "4f4b7fcc9281b027eb64aed3ea458a5b4ec610ba"
+}

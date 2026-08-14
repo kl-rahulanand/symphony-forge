@@ -44,6 +44,7 @@ def tracked_cruft(root: Path) -> list[str]:
     proc = subprocess.run(
         ["git", "ls-files", "-z", "--", *TRACKED_CRUFT_GLOBS], cwd=root,
         capture_output=True, text=True, check=True,
+        encoding="utf-8", errors="surrogateescape",
     )
     return [path for path in proc.stdout.split("\0") if path]
 
@@ -51,9 +52,11 @@ def tracked_cruft(root: Path) -> list[str]:
 def main() -> int:
     root = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(
         subprocess.run(["git", "rev-parse", "--show-toplevel"],
-                       capture_output=True, text=True, check=True).stdout.strip())
+                       capture_output=True, text=True, check=True,
+                       encoding="utf-8", errors="surrogateescape").stdout.strip())
     proc = subprocess.run(["git", "ls-files", "-z"], cwd=root,
-                          capture_output=True, text=True, check=True)
+                          capture_output=True, text=True, check=True,
+                          encoding="utf-8", errors="surrogateescape")
     tracked = [f for f in proc.stdout.split("\0") if f]
     violations: list[str] = []
     warnings: list[str] = []

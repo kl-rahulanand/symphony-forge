@@ -251,6 +251,7 @@ elif head and stamps:
             proc = subprocess.run(
                 ["git", "diff", "--name-only", f"{stamp}..{head}"],
                 cwd=root, capture_output=True, text=True,
+                encoding="utf-8", errors="surrogateescape",
             )
             if proc.returncode != 0:
                 missing.append(
@@ -327,7 +328,7 @@ append_event(root, "shipped", actor="orchestrator", story=issue_key,
 story_events = load_events(root, story=issue_key)
 if story_events:
     (history / "events.jsonl").write_text(
-        "".join(json.dumps(e) + "\n" for e in story_events))
+        "".join(json.dumps(e) + "\n" for e in story_events), encoding="utf-8")
 # The assumptions made while building this story explain behaviour that later
 # reads as a bug; they live in a cross-project table that gets archived on its
 # own cadence, so the story keeps its own copy.

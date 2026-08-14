@@ -108,11 +108,12 @@ All four boundaries below were grilled and human-settled 2026-08-11.
 - The harness never writes user-global files (`~/.codex/config.toml`
   included) — config rides the delegate argv.
 
-## Decomposition (epic -> stories; split recorded 2026-08-11)
+## Decomposition (epic -> stories)
 
 Planning exploration (Codex rescue) widened the known breakage: delegate.py
 is POSIX-only (fcntl/ps/killpg), so the spec's single story split by the
-independence rule, human-ruled at the FORGE-WIN-1 plan gate:
+independence rule. The first four stories were recorded 2026-08-11 and
+human-ruled at the FORGE-WIN-1 plan gate:
 
 1. **FORGE-WIN-1 - the fail-open core**: one interpreter-resolution point
    for all hooks (fail-closed within a working shell), forge.cmd shim,
@@ -125,3 +126,7 @@ independence rule, human-ruled at the FORGE-WIN-1 plan gate:
    default in vendored .codex/config.toml (found shipping
    danger-full-access), verified against a real delegation; hooks.json
    joins vendor-integrity hashing.
+5. **FORGE-WIN-ENC - no code page can break the harness**: explicit UTF-8
+   boundaries across factory scripts, a structural encoding-hygiene gate,
+   and locale-forced Linux and native-Windows CI proof. This canon fold-in
+   was settled at the FORGE-WIN-ENC plan grill on 2026-08-13.

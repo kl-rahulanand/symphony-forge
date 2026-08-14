@@ -5,13 +5,12 @@ import argparse
 import json
 import os
 import shlex
-import sys
 from pathlib import Path
 
 from factory_lib import (
     decomposition_state_path, dump_json, gate, head_sha, load_json, now_iso,
     protected_decomposition_state_path, repo_root, run_state_path,
-    safe_factory_write_json, sha256_of, validate_payload,
+    read_stdin_utf8, safe_factory_write_json, sha256_of, validate_payload,
 )
 from forge_cli.doctor import unrunnable_reason
 
@@ -20,9 +19,9 @@ parser.add_argument("--input", help="Path to decomposition JSON. If omitted, rea
 args = parser.parse_args()
 
 if args.input:
-    payload = json.loads(Path(args.input).read_text())
+    payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
 else:
-    raw = sys.stdin.read().strip()
+    raw = read_stdin_utf8().strip()
     if not raw:
         raise SystemExit("Expected JSON on stdin or via --input")
     payload = json.loads(raw)

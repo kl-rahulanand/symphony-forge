@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 from factory_lib import (
     dump_json, gate, head_sha, load_json, now_iso,
     protected_decomposition_state_path, repo_root, require_skills, review_dir,
-    run_state_path, validate_payload,
+    read_stdin_utf8, run_state_path, validate_payload,
 )
 from forge_cli.events import append_event
 from forge_cli.review_brief import declared_contracts
@@ -54,9 +53,9 @@ parser.add_argument("--input", help="Path to a JSON file. If omitted, read JSON 
 args = parser.parse_args()
 
 if args.input:
-    payload = json.loads(Path(args.input).read_text())
+    payload = json.loads(Path(args.input).read_text(encoding="utf-8"))
 else:
-    raw = sys.stdin.read().strip()
+    raw = read_stdin_utf8().strip()
     if not raw:
         raise SystemExit("Expected JSON on stdin or via --input")
     payload = json.loads(raw)

@@ -244,11 +244,11 @@ def ensure_onboarding(target: Path, name: str) -> bool:
     Returns True when something was written — idempotent via the heading."""
     readme = assert_target_destination(target, target / "README.md")
     if not readme.exists():
-        readme.write_text(f"# {name}\n{ONBOARDING_SECTION}")
+        readme.write_text(f"# {name}\n{ONBOARDING_SECTION}", encoding="utf-8")
         return True
-    if ONBOARDING_HEADING in readme.read_text():
+    if ONBOARDING_HEADING in readme.read_text(encoding="utf-8"):
         return False
-    with readme.open("a") as fh:
+    with readme.open("a", encoding="utf-8") as fh:
         fh.write(f"\n{ONBOARDING_SECTION}")
     return True
 
@@ -268,15 +268,15 @@ def ensure_jsonl_attributes(target: Path, harness: Path) -> bool:
     if not destination.exists():
         shutil.copy2(harness / ".gitattributes", destination)
         return True
-    current = destination.read_text()
+    current = destination.read_text(encoding="utf-8")
     required = [
-        line for line in (harness / ".gitattributes").read_text().splitlines()
+        line for line in (harness / ".gitattributes").read_text(encoding="utf-8").splitlines()
         if "merge=union" in line or line == "forge text eol=lf"
     ]
     missing = [line for line in required if line not in current.splitlines()]
     if not missing:
         return False
-    with destination.open("a") as handle:
+    with destination.open("a", encoding="utf-8") as handle:
         handle.write("\n" + "\n".join(missing) + "\n")
     return any("merge=union" in line for line in missing)
 
@@ -384,7 +384,7 @@ def ensure_record_origin(target: Path) -> bool:
     if marker.exists():
         return False
     events = target / ".factory" / "events.jsonl"
-    if events.is_file() and events.read_text().strip():
+    if events.is_file() and events.read_text(encoding="utf-8").strip():
         return False  # a Forge record already exists; its origin predates now
     # A shallow clone counts only its local commits, so rev-list would report a
     # truncated number the marker then claims forever. An honest boundary must
@@ -392,12 +392,12 @@ def ensure_record_origin(target: Path) -> bool:
     # the board omits the count rather than stating a false one.
     shallow = subprocess.run(
         ["git", "rev-parse", "--is-shallow-repository"],
-        cwd=target, capture_output=True, text=True,
+        cwd=target, capture_output=True, text=True, encoding="utf-8",
     )
     is_shallow = shallow.returncode == 0 and shallow.stdout.strip() == "true"
     count = subprocess.run(
         ["git", "rev-list", "--count", "HEAD"],
-        cwd=target, capture_output=True, text=True,
+        cwd=target, capture_output=True, text=True, encoding="utf-8",
     )
     # Shallow: count is truncated and unknowable -> null. A repo with no commit
     # yet (rev-list has no HEAD) genuinely has zero preceding -> 0, honest.
@@ -602,18 +602,18 @@ def cmd_init(args: argparse.Namespace) -> None:
     if manifest_yaml.exists():
         assert_target_destination(target, manifest_yaml).write_text(
             re.sub(r"^signoff_record:.*$", 'signoff_record: ""',
-                   manifest_yaml.read_text(), count=1, flags=re.MULTILINE)
+                   manifest_yaml.read_text(encoding="utf-8"), count=1, flags=re.MULTILINE), encoding="utf-8"
         )
 
     # Pin the vendored constitution to its source commit.
     try:
         commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True, encoding="utf-8"
         ).stdout.strip()
     except subprocess.CalledProcessError:
         commit = "unknown"
     assert_target_destination(target, target / "constitution" / "VENDORED_FROM").write_text(
-        f"symphony-forge @ {commit}\nUpdate by re-vendoring from the harness repo; do not edit in place.\n"
+        f"symphony-forge @ {commit}\nUpdate by re-vendoring from the harness repo; do not edit in place.\n", encoding="utf-8"
     )
     # Freeze the gate surface from birth (frozen-gate-integrity): the manifest
     # is what check_vendor_integrity.py compares against until the next vendoring.
@@ -627,7 +627,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     if brief_src.exists():
         shutil.copy2(brief_src, assert_target_file_destination(target, brief_dst))
     assert_target_destination(target, target / "docs" / "product" / "DISCOVERY.md").write_text(
-        DISCOVERY_TEMPLATE.format(name=args.name)
+        DISCOVERY_TEMPLATE.format(name=args.name), encoding="utf-8"
     )
     assert_target_destination(
         target, target / "docs" / "decisions"
@@ -639,7 +639,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     assert_target_destination(target, target / "prototype").mkdir(parents=True, exist_ok=True)
     assert_target_destination(
         target, target / "prototype" / "README.md"
-    ).write_text(PROTOTYPE_README)
+    ).write_text(PROTOTYPE_README, encoding="utf-8")
     for sub in ("active", "completed", "debt"):
         plan_dir = target / "plans" / sub
         assert_target_destination(target, plan_dir).mkdir(parents=True, exist_ok=True)
@@ -652,8 +652,8 @@ def cmd_init(args: argparse.Namespace) -> None:
         {"project": args.name, "created_at": now_iso()},
     )
 
-    agents_md = (root / "AGENTS.md").read_text().replace("Symphony Forge", args.name, 1)
-    assert_target_destination(target, target / "AGENTS.md").write_text(agents_md)
+    agents_md = (root / "AGENTS.md").read_text(encoding="utf-8").replace("Symphony Forge", args.name, 1)
+    assert_target_destination(target, target / "AGENTS.md").write_text(agents_md, encoding="utf-8")
     ensure_onboarding(target, args.name)
 
     if not (target / ".git").exists():

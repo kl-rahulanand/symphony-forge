@@ -1,0 +1,22 @@
+{
+  "generated_by": "griller",
+  "gate": "task",
+  "verdict": "pass",
+  "gaps": [
+    "Why a follow-up task instead of amending ENC.2?",
+    "Does the isolation-scan replace-decode weaken the gate it repairs?",
+    "Are the three fixes verified against the current tree (not stale review claims)?"
+  ],
+  "contradictions": [],
+  "resolutions": [
+    "ENC.2 is a completed stage; the recorder refuses rewriting completed contracts (0023's evidence rule) \u2014 a follow-up task is the sanctioned route, dependency-ordered after ENC.2.",
+    "No \u2014 skip lost ASCII marker detection entirely for undecodable files; replace-decode preserves it (markers are ASCII and survive replacement chars). The site becomes a documented diagnostic exception in the hygiene allowlist, consistent with 0043's consumer classification.",
+    "All three verified in the working tree before recording: the UnicodeDecodeError-skip exists in check_dual_runtime, removing the wrapper encoding stays hygiene-green (TextIOWrapper unchecked), and TemporaryFile('w+t') positional passes the gate (mode read at index 1)."
+  ],
+  "open_items": [],
+  "notes": "FORGE-WIN-ENC.3 (story-review follow-up) interrogated against the approved plan, decision 0043-draft, and the tree at ENC.2 close. Scope is exactly the two checkers plus tests. Frontier empty.",
+  "task_id": "FORGE-WIN-ENC.3",
+  "input_sha256": "b51e5436a958b7a475327056954ade7a58d60384f8f6c296f0f0e0142921b882",
+  "recorded_at": "2026-08-13T19:16:55+00:00",
+  "commit": "4bb33d7082cc4218cfbf3436c8f09b27953570cd"
+}

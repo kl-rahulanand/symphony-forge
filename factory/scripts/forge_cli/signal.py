@@ -32,7 +32,7 @@ def load_events(base: Path) -> list[dict]:
     path = signals_path(base)
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def open_signals(base: Path) -> list[dict]:
@@ -44,7 +44,7 @@ def open_signals(base: Path) -> list[dict]:
 def _append(base: Path, event: dict) -> None:
     path = signals_path(base)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as fh:
+    with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(event) + "\n")
 
 

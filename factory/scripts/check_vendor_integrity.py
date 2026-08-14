@@ -59,7 +59,7 @@ def integrity_problems(base: Path) -> list[str] | None:
     path = manifest_path(base)
     if not path.exists():
         return None
-    recorded = json.loads(path.read_text()).get("files", {})
+    recorded = json.loads(path.read_text(encoding="utf-8")).get("files", {})
     current = compute_hashes(base)
     problems = []
     for rel in sorted(set(recorded) | set(current)):

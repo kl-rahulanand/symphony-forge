@@ -293,6 +293,7 @@ def _lite_dirty_product_files(base: Path) -> list[str]:
 def _git_paths(base: Path, command: list[str]) -> list[str]:
     proc = subprocess.run(
         command, cwd=base, capture_output=True, text=True, env=clean_git_env(),
+        encoding="utf-8", errors="surrogateescape",
     )
     if proc.returncode != 0:
         fail(f"could not inspect the lite diff: {proc.stderr.strip()}")

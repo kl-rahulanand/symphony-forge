@@ -632,14 +632,17 @@
         "The recorded delegate invocation shows injected sandbox flags (unelevated, workspace-write) on Windows"
       ],
       "order": 29,
-      "status": "pending",
+      "status": "done",
       "epic": "windows-zero-setup",
       "skill": "backend",
       "kind": "feature",
       "depends_on": [
         "FORGE-WIN-1"
       ],
-      "spec": "docs/specs/windows-zero-setup.md"
+      "spec": "docs/specs/windows-zero-setup.md",
+      "completed_at": "2026-08-13T13:40:15+00:00",
+      "history": ".factory/history/FORGE-WIN-3/",
+      "outcome": "Symphony Forge delegations now run end-to-end on native Windows: forge delegate launches, supervises, and reaps Codex workers through a single psutil-based process model (decision 0042) on both Windows and POSIX \u2014 retiring the ps/killpg machinery and its lstart fragility. psutil ships as the harness's first runtime Python dependency, gated by a required doctor row and installed by doctor --fix (venv-aware, PEP-668-honest, converges in one run). Windows workers record the workspace-write sandbox; the unelevated tightening stays deferred (D-0021). The windows-hook-gates CI selector gains a real Windows launch/reap E2E."
     },
     {
       "key": "FORGE-WIN-SBX",
@@ -681,10 +684,30 @@
       "completed_at": "2026-08-12T13:45:26+00:00",
       "history": ".factory/history/FORGE-REV-2/",
       "outcome": "Review is no longer plan-blind: decomposition tasks can declare plan_contracts (the plan invariants they must satisfy), ./forge review-brief composes the reviewer's contract prompt (per-task or --all for the branch-wide closeout), the quality review artifact must verdict every declared contract with evidence \u2014 partial or missing verdicts become blocking findings \u2014 and pr-ready refuses until every contract is verified implemented. Incomplete implementation now blocks the gate instead of passing invisibly; tasks without contracts behave exactly as before."
+    },
+    {
+      "key": "FORGE-WIN-ENC",
+      "title": "No code page can break the harness (encoding hardening)",
+      "story": "As a Windows developer on a default cp1252 console, I can run every forge flow \u2014 doctor, verify, delegation, evidence recording \u2014 without an encoding crash or mojibake, so that the zero-setup promise holds on machines we never configured.",
+      "acceptance_criteria": [
+        "One shared decode convention for captured child output: common.run_quiet, stages' required-test/verify runners, and delegate's capture points decode utf-8 with errors=replace via a single helper (run_cmd landed in PR #101); no call-site drift remains (audited).",
+        "Text file I/O in factory/scripts is explicit: every read_text/write_text/open of a text file names encoding=utf-8 (plan/spec readers, delegate worker logs, evidence writers); a structural check or test refuses new locale-default text I/O.",
+        "windows-latest CI proves the flows under a FORCED cp1252 console (PYTHONIOENCODING=cp1252 or chcp 1252): forge next, doctor, a delegation launch, and verify all exit clean \u2014 the regression net GH's utf-8-friendly default never provides.",
+        "Vendored clients receive the hardening: the existing init/adopt/upgrade propagation tests cover the touched scripts."
+      ],
+      "order": 32,
+      "status": "active",
+      "epic": "windows-zero-setup",
+      "skill": "backend",
+      "kind": "feature",
+      "depends_on": [
+        "FORGE-WIN-3"
+      ],
+      "spec": "docs/specs/windows-zero-setup.md"
     }
   ],
   "generated_by": "human",
-  "updated_at": "2026-08-13T07:32:49+00:00",
+  "updated_at": "2026-08-13T13:40:56+00:00",
   "epics": [
     {
       "id": "symphony-forge",

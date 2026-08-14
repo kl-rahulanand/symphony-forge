@@ -41,7 +41,7 @@ def parse_stories(raw: str) -> list[str]:
 def decision_records(base: Path) -> list[dict]:
     records = []
     for path in sorted((base / "docs" / "decisions").glob("[0-9][0-9][0-9][0-9]-*.md")):
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         match = FRONTMATTER.match(text)
         fields: dict[str, str] = {}
         if match:
@@ -91,7 +91,7 @@ def cmd_new(args: argparse.Namespace) -> None:
                                     stories=story)
     if old_record is not None:
         text = text.replace("---\n\n#", f"supersedes: {old_record.stem}\n---\n\n#", 1)
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     result = f"Created {path}" + (f" (governs {story})" if story else "")
     if old_record is not None:
         result += f"; Supersedes {old_record.stem}"
@@ -107,7 +107,7 @@ def cmd_link(args: argparse.Namespace) -> None:
     if not matches:
         fail(f"no decision record matching docs/decisions/NNNN-{slug}.md")
     record = matches[-1]
-    text = record.read_text()
+    text = record.read_text(encoding="utf-8")
     match = FRONTMATTER.match(text)
     if match is None:
         fail(f"{record.name} has no frontmatter to link into")
@@ -124,7 +124,7 @@ def cmd_link(args: argparse.Namespace) -> None:
     joined = f"stories: [{', '.join(stories)}]"
     text = (re.sub(r"^stories: .*$", joined, text, count=1, flags=re.MULTILINE)
             if current else text.replace("---\n\n#", f"{joined}\n---\n\n#", 1))
-    record.write_text(text)
+    record.write_text(text, encoding="utf-8")
     print(f"{record.stem} now governs {', '.join(stories)}")
 
 
@@ -157,7 +157,7 @@ def cmd_accept(args: argparse.Namespace) -> None:
     if not matches:
         fail(f"no decision record matching docs/decisions/NNNN-{slug}.md")
     record = matches[-1]
-    text = record.read_text()
+    text = record.read_text(encoding="utf-8")
     if "status: accepted" in text:
         print(f"{record.relative_to(base)} is already accepted.")
         return
@@ -166,7 +166,7 @@ def cmd_accept(args: argparse.Namespace) -> None:
         text = text.replace('confirmed_by: ""', f'confirmed_by: "{args.by}"', 1)
     else:
         text = re.sub(r"confirmed_by: .*", f'confirmed_by: "{args.by}"', text, count=1)
-    record.write_text(text)
+    record.write_text(text, encoding="utf-8")
     rel = record.relative_to(base)
     # The replacement is live now, so retire the predecessor in the same step:
     # between `decision new --supersedes` and here, the old record kept governing.
@@ -174,13 +174,13 @@ def cmd_accept(args: argparse.Namespace) -> None:
     if supersedes:
         old = decisions / f"{supersedes.group(1)}.md"
         if old.is_file():
-            old_text = old.read_text()
+            old_text = old.read_text(encoding="utf-8")
             old_text = re.sub(r"status: (accepted|proposed)", "status: superseded",
                               old_text, count=1)
             if "superseded_by:" not in old_text:
                 old_text = old_text.replace("---\n\n#",
                                             f"superseded_by: {record.stem}\n---\n\n#", 1)
-            old.write_text(old_text)
+            old.write_text(old_text, encoding="utf-8")
             print(f"Accepted: {rel} (confirmed_by: {args.by}); "
                   f"Superseded: {old.relative_to(base)} -> {record.stem}")
             return

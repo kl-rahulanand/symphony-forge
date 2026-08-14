@@ -1,0 +1,22 @@
+{
+  "generated_by": "autoreview",
+  "score": 9,
+  "summary": "Performance lens of the story pass. The sweep adds only keyword arguments to existing calls \u2014 no new I/O, no extra passes. check_encoding_hygiene is a single AST walk over factory/scripts (sub-second, verified: 'encoding hygiene: OK' returns immediately) run once per PR and at stage close. The locale-forced CI step re-runs five fast checkers, adding well under a minute to scaffold-check. No hot-path changes.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "category": "ci-cost",
+      "area": ".github/workflows/factory-scaffold.yml",
+      "summary": "the no-UTF-8-locale step re-runs the standalone checkers (~seconds each); acceptable for the regression net it buys"
+    }
+  ],
+  "residual_risks": [],
+  "recommendation": "no performance blockers",
+  "reviewed_scope": [
+    "factory/scripts",
+    ".github/workflows/factory-scaffold.yml"
+  ],
+  "aspect": "performance",
+  "recorded_at": "2026-08-13T19:31:54+00:00",
+  "commit": "a25e56d6f80bed7a4324473bbc517903dd6c2979"
+}

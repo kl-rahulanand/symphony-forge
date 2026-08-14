@@ -44,13 +44,26 @@ def is_harness_owned(path: str) -> bool:
     return any(path == tree or path.startswith(f"{tree}/") for tree in COPY_TREES)
 
 
-def git(root: Path, *args: str) -> str:
-    proc = subprocess.run(
-        ["git", *args], cwd=root, capture_output=True, text=True,
-    )
+def _git_result(proc: subprocess.CompletedProcess[str], args: tuple[str, ...]) -> str:
     if proc.returncode != 0:
         raise SystemExit(proc.stderr.strip() or f"git {' '.join(args)} failed")
     return proc.stdout
+
+
+def git(root: Path, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, text=True, encoding="utf-8",
+        errors="strict",
+    )
+    return _git_result(proc, args)
+
+
+def git_paths(root: Path, *args: str) -> str:
+    proc = subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, text=True, encoding="utf-8",
+        errors="surrogateescape",
+    )
+    return _git_result(proc, args)
 
 
 def roadmap_at(root: Path, ref: str) -> dict[str, dict]:
@@ -78,7 +91,9 @@ def roadmap_at(root: Path, ref: str) -> dict[str, dict]:
 
 def added_paths(root: Path, base: str) -> set[str]:
     added: set[str] = set()
-    for line in git(root, "diff", "--name-status", f"{base}..HEAD").splitlines():
+    for line in git_paths(
+        root, "diff", "--name-status", f"{base}..HEAD",
+    ).splitlines():
         fields = line.split("\t")
         if len(fields) < 2:
             continue
@@ -91,7 +106,9 @@ def added_paths(root: Path, base: str) -> set[str]:
 
 def changed_paths(root: Path, base: str) -> set[str]:
     changed: set[str] = set()
-    for line in git(root, "diff", "--name-only", f"{base}..HEAD").splitlines():
+    for line in git_paths(
+        root, "diff", "--name-only", f"{base}..HEAD",
+    ).splitlines():
         path = line.strip()
         if path:
             changed.add(path)

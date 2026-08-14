@@ -16,7 +16,10 @@ def fail(msg: str) -> None:
 
 def run_quiet(cmd: list[str]) -> tuple[int, str]:
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=15,
+            encoding="utf-8", errors="replace",
+        )
         return proc.returncode, (proc.stdout + proc.stderr).strip()
     except (OSError, subprocess.TimeoutExpired) as exc:
         return 1, str(exc)

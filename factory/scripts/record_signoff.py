@@ -44,7 +44,7 @@ def pin_into_harness(manifest: Path, relative: str) -> None:
     # through `forge upgrade` (it is project-owned), so the key may simply be
     # absent; insert_signoff_pin adds it rather than refusing, or the gate would
     # be unreachable in exactly the repos that predate it.
-    manifest.write_text(insert_signoff_pin(manifest.read_text(), relative))
+    manifest.write_text(insert_signoff_pin(manifest.read_text(encoding="utf-8"), relative), encoding="utf-8")
 
 
 def workflow_input_problems(root: Path) -> list[str]:
@@ -75,7 +75,7 @@ def workflow_input_problems(root: Path) -> list[str]:
             + ", ".join(REQUIRED_BRIEF_HEADINGS)
         )
     else:
-        sections = parse_sections(brief.read_text())
+        sections = parse_sections(brief.read_text(encoding="utf-8"))
         incomplete = [
             heading
             for heading in REQUIRED_BRIEF_HEADINGS
@@ -174,7 +174,7 @@ def main() -> int:
             return 1
         record = candidates[0]
 
-    fields = parse_frontmatter(record.read_text())
+    fields = parse_frontmatter(record.read_text(encoding="utf-8"))
     relative = record.relative_to(root).as_posix()
     if fields.get("status") != "accepted":
         print(

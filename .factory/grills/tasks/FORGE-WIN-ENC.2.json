@@ -1,0 +1,24 @@
+{
+  "generated_by": "griller",
+  "gate": "task",
+  "verdict": "pass",
+  "gaps": [
+    "Does ENC.2's contract assume anything ENC.1 did not produce?",
+    "Is the nt glyph round-trip kept OUT of stage-local required_tests (WIN-3 skip-counts-as-fail lesson)?",
+    "The autoreview finding parked to this stage \u2014 is CI wiring of check_encoding_hygiene actually in this contract?",
+    "Can the LC_ALL=C step's runtime assertion be written without tripping the new hygiene gate itself?"
+  ],
+  "contradictions": [],
+  "resolutions": [
+    "Verified against the tree at stage open: check_encoding_hygiene.py exists and exits 0, the six temp handles and stdin reader are hardened, and the swept scripts are in place \u2014 the CI steps this stage adds exercise exactly what ENC.1 shipped.",
+    "Yes \u2014 the sole required test is a POSIX selector-hygiene test (asserts every CI node id exists, D-0020); the glyph round-trip lives in the windows-hook-gates selector only.",
+    "Yes \u2014 AC1 wires the checker into the scaffold-check job's steps (the parked finding from ENC.1's review); this grill confirms it is contract text, not an assumption.",
+    "The assertion runs as an inline python -c step in the workflow (locale.getpreferredencoding check), outside factory/scripts \u2014 the hygiene gate's surface is factory/scripts/** only, and D-0026 already covers workflow-inline Python as parked scope; no conflict."
+  ],
+  "open_items": [],
+  "notes": "FORGE-WIN-ENC.2 contract interrogated against the approved plan, ENC.1's shipped tree, decisions 0042/0043-draft, and lessons (skip-counts-as-fail, false-green CI). Frontier empty.",
+  "task_id": "FORGE-WIN-ENC.2",
+  "input_sha256": "4c6e6cc37e21ed249500b33db0211cdb90ad59be58c5117369f7baef08404b00",
+  "recorded_at": "2026-08-13T18:52:56+00:00",
+  "commit": "53ddc96f8e8a106b2831d9a59da712650e22a313"
+}

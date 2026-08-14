@@ -147,7 +147,7 @@ def cmd_save(args: argparse.Namespace) -> None:
             + ", ".join(signal["id"] for signal in contradictions)
             + ". Resolve the contradiction before approving the plan."
         )
-    fields, body = parse_frontmatter(source.read_text())
+    fields, body = parse_frontmatter(source.read_text(encoding="utf-8"))
     if "decisions_reviewed" not in fields or not isinstance(
         fields["decisions_reviewed"], list
     ):
@@ -195,7 +195,7 @@ def cmd_save(args: argparse.Namespace) -> None:
         f"saved: {now_iso()}\nstory: {story}\n"
         f"decisions_reviewed:{decisions_value}\n---\n"
     )
-    dest.write_text(header + body)
+    dest.write_text(header + body, encoding="utf-8")
     if state:
         state["plan_status"] = status
         state["plan_file"] = dest.relative_to(base).as_posix()
@@ -241,7 +241,7 @@ def cmd_approve(args: argparse.Namespace) -> None:
         fail("no current active plan to approve — pass --issue <key> to select "
              "one, or run `forge plan save` first")
         return  # unreachable (fail raises); narrows `plan` to a real path below
-    fields, body = parse_frontmatter(plan.read_text())
+    fields, body = parse_frontmatter(plan.read_text(encoding="utf-8"))
     # The approval is for THIS plan in THIS context: bind issue and story so a
     # matching body cannot be replayed under a different story.
     marker = {
@@ -271,7 +271,7 @@ def cmd_list(args: argparse.Namespace) -> None:
     rows = []
     for location in ("active", "completed"):
         for path in sorted((base / "plans" / location).glob("*.md")):
-            fields, _ = parse_frontmatter(path.read_text())
+            fields, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
             issue = str(fields.get("issue", "-"))
             story = str(fields.get("story", "-"))
             rows.append((
@@ -305,7 +305,7 @@ def cmd_assume(args: argparse.Namespace) -> None:
             "plan first with `forge.py plan save` — assumptions attach to a plan."
         )
     plan = plans[-1]
-    text = plan.read_text()
+    text = plan.read_text(encoding="utf-8")
     heading = "## Implementation Assumptions"
     entry = f"- {datetime.date.today().isoformat()}: {args.text.strip()}\n"
     if heading in text:
@@ -318,7 +318,7 @@ def cmd_assume(args: argparse.Namespace) -> None:
             "Dev: review these before merge; promote any that matter to docs/decisions/. -->\n"
             + entry
         )
-    plan.write_text(text)
+    plan.write_text(text, encoding="utf-8")
     from .assumptions import append_row
     entry_id = append_row(base, issue, args.text)
     print(f"Assumption recorded in {plan.relative_to(base)} and ledgered as {entry_id} "

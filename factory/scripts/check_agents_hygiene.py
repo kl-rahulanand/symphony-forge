@@ -15,7 +15,7 @@ from pathlib import Path
 
 root = Path(__file__).resolve().parents[2]
 agents = root / "AGENTS.md"
-text = agents.read_text()
+text = agents.read_text(encoding="utf-8")
 lines = text.splitlines()
 required_markers = [
     "## What This Repo Is",

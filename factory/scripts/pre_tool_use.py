@@ -481,6 +481,7 @@ if tool_name == "Bash" and has_git_commit(command):
         staged = subprocess.run(
             ["git", "add", "--", "docs/context/ledger.json"],
             cwd=root, capture_output=True, text=True,
+            encoding="utf-8", errors="surrogateescape",
         )
         if staged.returncode:
             deny("Context ledger refreshed but could not be staged: " +
