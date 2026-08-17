@@ -1212,6 +1212,46 @@
 {"event": "review-security", "generated_by": "autoreview", "at": "2026-08-13T12:33:52+00:00", "story": "FORGE-WIN-3"}
 {"event": "pr-linked", "generated_by": "orchestrator", "at": "2026-08-13T12:46:30+00:00", "story": "FORGE-WIN-3", "detail": "knacklabs/symphony-forge#100"}
 {"event": "pr-linked", "generated_by": "orchestrator", "at": "2026-08-13T16:23:58+00:00", "story": "FORGE-WIN-3", "detail": "knacklabs/symphony-forge#102"}
+{"event": "spec-draft", "generated_by": "orchestrator", "at": "2026-08-13T17:02:18+00:00", "detail": "accountable-engineering-loop: Accountable engineering loop: JIT contracts enforced, grills carry proof, diffs stay reviewable"}
+{"event": "spec-draft", "generated_by": "orchestrator", "at": "2026-08-13T17:03:15+00:00", "detail": "accountable-engineering-loop: Accountable engineering loop: JIT contracts enforced, grills carry proof, diffs stay reviewable"}
+{"event": "spec-confirmed", "generated_by": "orchestrator", "at": "2026-08-13T17:04:02+00:00", "detail": "accountable-engineering-loop"}
+{"event": "roadmap-epic-add", "generated_by": "orchestrator", "at": "2026-08-13T17:05:19+00:00", "detail": "accountable-engineering"}
+{"event": "roadmap-add", "generated_by": "orchestrator", "at": "2026-08-13T17:05:35+00:00", "story": "FORGE-ACC-1", "detail": "docs/specs/accountable-engineering-loop.md"}
+{"event": "roadmap-add", "generated_by": "orchestrator", "at": "2026-08-13T17:05:35+00:00", "story": "FORGE-ACC-2", "detail": "docs/specs/accountable-engineering-loop.md"}
+{"event": "intake", "generated_by": "orchestrator", "at": "2026-08-13T17:06:10+00:00", "story": "FORGE-ACC-1", "detail": "JIT frontier is enforced, not advisory"}
+{"event": "plan-human-approved", "generated_by": "human", "at": "2026-08-13T17:11:04+00:00", "story": "FORGE-ACC-1", "detail": "FORGE-ACC-1 approved by Ravi Kiran Vemula"}
+{"event": "plan-approved", "generated_by": "planner-high", "at": "2026-08-13T17:11:05+00:00", "story": "FORGE-ACC-1", "detail": "plans/active/FORGE-ACC-1-jit-frontier-is-enforced-not-advisory.md"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-13T17:11:45+00:00", "story": "FORGE-ACC-1", "detail": "3 task(s)"}
+{"event": "implementing", "generated_by": "orchestrator", "at": "2026-08-13T17:11:45+00:00", "story": "FORGE-ACC-1"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-13T17:12:45+00:00", "story": "FORGE-ACC-1", "detail": "3 task(s)"}
+{"event": "stage-start", "generated_by": "implementer", "at": "2026-08-13T17:13:18+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T1 Recorder refuses future execution detail"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-13T17:20:41+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T1 (write)"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-13T17:23:40+00:00", "story": "FORGE-ACC-1", "detail": "3 task(s)"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-13T17:28:51+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T1 (write)"}
+{"event": "stage-contract-changed", "generated_by": "implementer", "at": "2026-08-13T17:29:15+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T1: task contract re-recorded mid-stage"}
+{"event": "stage-done", "generated_by": "implementer", "at": "2026-08-13T17:29:15+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T1 Recorder refuses future execution detail"}
+{"event": "spec-draft", "generated_by": "orchestrator", "at": "2026-08-13T17:50:55+00:00", "detail": "accountable-engineering-loop: Accountable engineering loop: JIT contracts enforced, grills carry proof, diffs stay reviewable"}
+{"event": "spec-confirmed", "generated_by": "orchestrator", "at": "2026-08-13T17:51:52+00:00", "detail": "accountable-engineering-loop"}
+{"event": "roadmap-add", "generated_by": "orchestrator", "at": "2026-08-13T17:52:03+00:00", "story": "FORGE-ACC-3", "detail": "docs/specs/accountable-engineering-loop.md"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-13T17:54:32+00:00", "story": "FORGE-ACC-1", "detail": "3 task(s)"}
+{"event": "stage-start", "generated_by": "implementer", "at": "2026-08-13T17:55:26+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T2 Shared readiness gate at stage start and delegate"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-13T18:09:07+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T2 (write)"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-13T18:18:16+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T2 (write)"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-13T22:30:09+00:00", "story": "FORGE-ACC-1", "detail": "3 task(s)"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-13T23:16:17+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T2 (write)"}
+{"event": "stage-contract-changed", "generated_by": "implementer", "at": "2026-08-13T23:16:38+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T2: task contract re-recorded mid-stage"}
+{"event": "stage-done", "generated_by": "implementer", "at": "2026-08-13T23:16:38+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T2 Shared readiness gate at stage start and delegate"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T02:12:14+00:00", "story": "FORGE-ACC-1", "detail": "3 task(s)"}
+{"event": "stage-start", "generated_by": "implementer", "at": "2026-08-14T02:13:16+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T3 forge next routes the JIT loop; docs stop contradicting it"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T02:22:22+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T3 (write)"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T02:39:43+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T3 (write)"}
+{"event": "stage-done", "generated_by": "implementer", "at": "2026-08-14T02:40:19+00:00", "story": "FORGE-ACC-1", "detail": "ACC1-T3 forge next routes the JIT loop; docs stop contradicting it"}
+{"event": "tests-automated", "generated_by": "implementer", "at": "2026-08-14T02:41:20+00:00", "story": "FORGE-ACC-1", "detail": "pass"}
+{"event": "verify-passed", "generated_by": "orchestrator", "at": "2026-08-14T02:55:20+00:00", "story": "FORGE-ACC-1"}
+{"event": "review-quality", "generated_by": "autoreview", "at": "2026-08-14T02:55:59+00:00", "story": "FORGE-ACC-1"}
+{"event": "review-performance", "generated_by": "autoreview", "at": "2026-08-14T02:55:59+00:00", "story": "FORGE-ACC-1"}
+{"event": "review-security", "generated_by": "autoreview", "at": "2026-08-14T02:56:00+00:00", "story": "FORGE-ACC-1"}
+{"event": "shipped", "generated_by": "orchestrator", "at": "2026-08-14T02:56:09+00:00", "story": "FORGE-ACC-1", "detail": "Implementation can no longer begin before its contract exists and survived an independent grill: the decomposition recorder refuses execution detail on future tasks, a shared readiness gate makes stag"}
 {"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-13T16:56:26+00:00", "story": "FORGE-WIN-ENC", "detail": "2 task(s)"}
 {"event": "stage-start", "generated_by": "implementer", "at": "2026-08-13T16:56:35+00:00", "story": "FORGE-WIN-ENC", "detail": "FORGE-WIN-ENC.1 Encoding sweep + value-validating hygiene gate"}
 {"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-13T17:15:52+00:00", "story": "FORGE-WIN-ENC", "detail": "FORGE-WIN-ENC.1 (write)"}
@@ -1234,3 +1274,75 @@
 {"event": "review-performance", "generated_by": "autoreview", "at": "2026-08-13T19:31:54+00:00", "story": "FORGE-WIN-ENC"}
 {"event": "review-security", "generated_by": "autoreview", "at": "2026-08-13T19:31:54+00:00", "story": "FORGE-WIN-ENC"}
 {"event": "pr-linked", "generated_by": "orchestrator", "at": "2026-08-13T19:47:17+00:00", "story": "FORGE-WIN-ENC", "detail": "knacklabs/symphony-forge#103"}
+{"event": "spec-draft", "generated_by": "orchestrator", "at": "2026-08-14T05:47:16+00:00", "detail": "conflict-free-story-state: Conflict-free story state: overlapping PRs stop colliding on recorded evidence"}
+{"event": "spec-confirmed", "generated_by": "orchestrator", "at": "2026-08-14T05:48:50+00:00", "detail": "conflict-free-story-state"}
+{"event": "roadmap-add", "generated_by": "orchestrator", "at": "2026-08-14T05:49:12+00:00", "story": "FORGE-CFS-1", "detail": "docs/specs/conflict-free-story-state.md"}
+{"event": "intake", "generated_by": "orchestrator", "at": "2026-08-14T05:55:22+00:00", "story": "FORGE-ACC-2", "detail": "Grills carry proof, diffs stay reviewable"}
+{"event": "plan-human-approved", "generated_by": "human", "at": "2026-08-14T06:01:01+00:00", "story": "FORGE-ACC-2", "detail": "FORGE-ACC-2 approved by Ravi Kiran Vemula"}
+{"event": "plan-approved", "generated_by": "planner-high", "at": "2026-08-14T06:01:01+00:00", "story": "FORGE-ACC-2", "detail": "plans/active/FORGE-ACC-2-grills-carry-proof-diffs-stay-reviewable.md"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T06:01:53+00:00", "story": "FORGE-ACC-2", "detail": "5 task(s)"}
+{"event": "implementing", "generated_by": "orchestrator", "at": "2026-08-14T06:02:02+00:00", "story": "FORGE-ACC-2"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T06:15:30+00:00", "story": "FORGE-ACC-2", "detail": "5 task(s)"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T06:20:03+00:00", "story": "FORGE-ACC-2", "detail": "5 task(s)"}
+{"event": "stage-start", "generated_by": "implementer", "at": "2026-08-14T06:23:13+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T1 Task grills carry proof and rounds"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T06:32:29+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T1 (write)"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T06:37:31+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T1 (write)"}
+{"event": "stage-done", "generated_by": "implementer", "at": "2026-08-14T06:38:27+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T1 Task grills carry proof and rounds"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T06:52:22+00:00", "story": "FORGE-ACC-2", "detail": "5 task(s)"}
+{"event": "stage-start", "generated_by": "implementer", "at": "2026-08-14T06:54:16+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T2 Grounding digest derived internally"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T07:05:01+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T2 (write)"}
+{"event": "stage-done", "generated_by": "implementer", "at": "2026-08-14T07:07:34+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T2 Grounding digest derived internally"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T09:20:37+00:00", "story": "FORGE-ACC-2", "detail": "5 task(s)"}
+{"event": "stage-start", "generated_by": "implementer", "at": "2026-08-14T09:22:45+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T3 Frozen skeleton, immutable completed contracts, plan_contracts wiring"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T09:39:24+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T3 (write)"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T09:45:12+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T3 (write)"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T09:58:12+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T3 (write)"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T10:10:02+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T3 (write)"}
+{"event": "stage-done", "generated_by": "implementer", "at": "2026-08-14T10:11:07+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T3 Frozen skeleton, immutable completed contracts, plan_contracts wiring"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T10:32:56+00:00", "story": "FORGE-ACC-2", "detail": "5 task(s)"}
+{"event": "stage-start", "generated_by": "implementer", "at": "2026-08-14T10:33:42+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T4 Review budget at stage done and in the brief"}
+{"event": "signal-confusion", "generated_by": "implementer", "at": "2026-08-14T10:36:29+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T4 brief does not define the review_budget JSON shape (field names, required keys, or reason placement); implementation cannot add recorder validation, stage enforcement, and stable brief output "}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T10:36:35+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T4 (write)"}
+{"event": "signal-resolved", "generated_by": "orchestrator", "at": "2026-08-14T10:37:15+00:00", "story": "FORGE-ACC-2", "detail": "S-0001-bd0b: review_budget is an OPTIONAL task field: an object with max_changed_files (int over 0), max_changed_lines (int over 0), and reason (string). Absent field means defaults 8 files / 400 lines. reason is "}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T10:49:11+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T4 (write)"}
+{"event": "signal-confusion", "generated_by": "implementer", "at": "2026-08-14T11:07:06+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T4 requires file and line budgets over the same stage diff, but _measure subtracts dirty-at-start content using hashes while exact additions/deletions from that content cannot be reconstructed; c"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T11:07:34+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T4 (write)"}
+{"event": "stage-done", "generated_by": "implementer", "at": "2026-08-14T11:08:21+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T4 Review budget at stage done and in the brief"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T11:10:14+00:00", "story": "FORGE-ACC-2", "detail": "5 task(s)"}
+{"event": "stage-start", "generated_by": "implementer", "at": "2026-08-14T11:11:24+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T5 Board renders task rows"}
+{"event": "signal-scope-change", "generated_by": "implementer", "at": "2026-08-14T11:13:04+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T5 requires the story drawer to visibly render grill freshness and budget usage, but that renderer is factory/board/index.html and the declared write scope permits only factory_lib.py, board.py, "}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T11:14:07+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T5 (write)"}
+{"event": "signal-resolved", "generated_by": "orchestrator", "at": "2026-08-14T11:15:02+00:00", "story": "FORGE-ACC-2", "detail": "S-0002-7410: Budget lines intentionally use the clean git base-to-now numstat over the product paths _measure attributes. Dirty-at-start content is acceptable imprecision in the count - the operator-recorded T4 ro"}
+{"event": "signal-resolved", "generated_by": "orchestrator", "at": "2026-08-14T11:15:02+00:00", "story": "FORGE-ACC-2", "detail": "S-0003-51e7: Operator sanctioned (AskUserQuestion round 2026-08-14): add factory/board/index.html to ACC2-T5's write_scope via the sanctioned active-frontier re-record; the contract and grill are being re-recorded"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T11:15:26+00:00", "story": "FORGE-ACC-2", "detail": "5 task(s)"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T11:23:45+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T5 (write)"}
+{"event": "stage-contract-changed", "generated_by": "implementer", "at": "2026-08-14T11:24:57+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T5: task contract re-recorded mid-stage"}
+{"event": "stage-done", "generated_by": "implementer", "at": "2026-08-14T11:24:57+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T5 Board renders task rows"}
+{"event": "tests-automated", "generated_by": "implementer", "at": "2026-08-14T11:25:59+00:00", "story": "FORGE-ACC-2", "detail": "pass"}
+{"event": "verify-failed", "generated_by": "orchestrator", "at": "2026-08-14T11:41:08+00:00", "story": "FORGE-ACC-2"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T11:42:52+00:00", "story": "FORGE-ACC-2", "detail": "6 task(s)"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T11:43:30+00:00", "story": "FORGE-ACC-2", "detail": "6 task(s)"}
+{"event": "stage-start", "generated_by": "implementer", "at": "2026-08-14T11:43:31+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T6 Migrate the last one-shot lifecycle fixture"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T11:46:03+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T6 (write)"}
+{"event": "stage-done", "generated_by": "implementer", "at": "2026-08-14T11:46:30+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T6 Migrate the last one-shot lifecycle fixture"}
+{"event": "verify-failed", "generated_by": "orchestrator", "at": "2026-08-14T12:02:37+00:00", "story": "FORGE-ACC-2"}
+{"event": "spec-draft", "generated_by": "orchestrator", "at": "2026-08-14T12:23:42+00:00", "detail": "accountable-engineering-loop: Accountable engineering loop: JIT contracts enforced, grills carry proof, diffs stay reviewable"}
+{"event": "spec-confirmed", "generated_by": "orchestrator", "at": "2026-08-14T12:23:59+00:00", "detail": "accountable-engineering-loop"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T12:33:47+00:00", "story": "FORGE-ACC-2", "detail": "7 task(s)"}
+{"event": "decomposed", "generated_by": "docs-decomposer", "at": "2026-08-14T12:34:12+00:00", "story": "FORGE-ACC-2", "detail": "7 task(s)"}
+{"event": "stage-start", "generated_by": "implementer", "at": "2026-08-14T12:34:35+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T7 Batch-migrate all remaining one-shot fixtures"}
+{"event": "verify-failed", "generated_by": "orchestrator", "at": "2026-08-14T13:03:54+00:00", "story": "FORGE-ACC-2"}
+{"event": "delegated", "generated_by": "orchestrator", "at": "2026-08-14T13:05:23+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T7 (write)"}
+{"event": "verify-passed", "generated_by": "orchestrator", "at": "2026-08-14T13:23:39+00:00", "story": "FORGE-ACC-2"}
+{"event": "stage-done", "generated_by": "implementer", "at": "2026-08-14T13:24:49+00:00", "story": "FORGE-ACC-2", "detail": "ACC2-T7 Batch-migrate all remaining one-shot fixtures"}
+{"event": "tests-automated", "generated_by": "implementer", "at": "2026-08-14T13:25:04+00:00", "story": "FORGE-ACC-2", "detail": "pass"}
+{"event": "review-quality", "generated_by": "autoreview", "at": "2026-08-14T13:26:07+00:00", "story": "FORGE-ACC-2"}
+{"event": "review-performance", "generated_by": "autoreview", "at": "2026-08-14T13:26:07+00:00", "story": "FORGE-ACC-2"}
+{"event": "review-security", "generated_by": "autoreview", "at": "2026-08-14T13:26:08+00:00", "story": "FORGE-ACC-2"}
+{"event": "verify-passed", "generated_by": "orchestrator", "at": "2026-08-14T13:44:18+00:00", "story": "FORGE-ACC-2"}
+{"event": "shipped", "generated_by": "orchestrator", "at": "2026-08-14T13:44:36+00:00", "story": "FORGE-ACC-2", "detail": "A task can no longer be implemented on an unproven plan: its grill must show what was inspected, how the system currently flows, how every acceptance criterion will be proven, what new abstractions ar"}
+{"event": "spec-draft", "generated_by": "orchestrator", "at": "2026-08-14T05:47:16+00:00", "detail": "conflict-free-story-state: Conflict-free story state: overlapping PRs stop colliding on recorded evidence"}
+{"event": "spec-confirmed", "generated_by": "orchestrator", "at": "2026-08-14T05:48:50+00:00", "detail": "conflict-free-story-state"}
+{"event": "roadmap-add", "generated_by": "orchestrator", "at": "2026-08-14T05:49:12+00:00", "story": "FORGE-CFS-1", "detail": "docs/specs/conflict-free-story-state.md"}
+{"event": "pr-linked", "generated_by": "orchestrator", "at": "2026-08-14T14:30:50+00:00", "story": "FORGE-ACC-1", "detail": "knacklabs/symphony-forge#104"}
+{"event": "pr-linked", "generated_by": "orchestrator", "at": "2026-08-15T06:31:34+00:00", "story": "FORGE-ACC-2", "detail": "knacklabs/symphony-forge#107"}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -9,10 +10,12 @@ from pathlib import Path
 
 from factory_lib import (
     decomposition_state_path, dump_json, gate, head_sha, load_json, now_iso,
-    protected_decomposition_state_path, repo_root, run_state_path,
-    read_stdin_utf8, safe_factory_write_json, sha256_of, validate_payload,
+    plan_digest_without_assumptions, protected_decomposition_state_path,
+    repo_root, run_state_path, read_stdin_utf8, safe_factory_write_json,
+    validate_payload,
 )
 from forge_cli.doctor import unrunnable_reason
+from forge_cli.stages import review_budget
 
 parser = argparse.ArgumentParser(description="Record decomposition from structured JSON")
 parser.add_argument("--input", help="Path to decomposition JSON. If omitted, read from stdin.")
@@ -62,7 +65,7 @@ if not plan_path.is_file():
     raise SystemExit(
         f"decomposition provenance: active plan {plan_file!r} is not readable"
     )
-plan_sha256 = sha256_of(plan_path)
+plan_sha256 = plan_digest_without_assumptions(plan_path)
 # The digest the recorder can actually VOUCH for: it reads the active plan
 # itself, so the stamp is true at record time without asking the producer to
 # hash a file. A supplied digest is still compared — a producer that knows
@@ -151,6 +154,12 @@ for pos, task in enumerate(tasks, 1):
                 "name an earlier task; array order is the execution sequence."
             )
     seen_task_ids.add(task_id)
+    try:
+        review_budget(task)
+    except ValueError as exc:
+        raise SystemExit(
+            f"decomposition task {task_id}: review_budget {exc}"
+        ) from exc
     # The narrative fields were prompt-convention and silently droppable, so a
     # task could reach the board as an id and a title. They are the contract now.
     objective = task.get("objective")
@@ -286,8 +295,22 @@ for pos, task in enumerate(tasks, 1):
         )
 from forge_cli.delegate import delegation_exclusion  # noqa: E402
 from forge_cli.stages import (  # noqa: E402
-    load_stages, task_digest, write_skeleton, write_stages,
+    authoritative_stages_path, load_stages, task_digest, write_skeleton,
+    write_stages,
 )
+
+
+def _full_contract_digest(task: dict) -> str:
+    """Hash every recorded task field; stage measurement stays four-field."""
+    canonical = json.dumps(task, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _task_graph(tasks: list[dict]) -> list[tuple[str, tuple[str, ...]]]:
+    return [
+        (task["id"], tuple(task.get("dependencies", [])))
+        for task in tasks
+    ]
 
 # Stage transitions and decomposition publication share one protected state
 # lock. A re-record may amend an active task, but never rewrite the contract a
@@ -298,14 +321,77 @@ with delegation_exclusion(
     current_tasks = {
         task.get("id"): task for task in tasks if isinstance(task, dict)
     }
+    protected_decomposition = protected_decomposition_state_path(root)
+    protected_stages = authoritative_stages_path(root)
+    first_recording = (
+        not protected_decomposition.exists() and not protected_stages.exists()
+    )
     prior_decomposition = load_json(
-        protected_decomposition_state_path(root), default={})
+        protected_decomposition, default={})
     prior_tasks = {
         task.get("id"): task
         for task in prior_decomposition.get("tasks") or []
         if isinstance(task, dict)
     }
     stages_data = load_stages(root)
+    stage_statuses = {
+        stage.get("id"): stage.get("status")
+        for stage in stages_data.get("stages") or []
+        if isinstance(stage, dict)
+    }
+    frontier_index = next(
+        (
+            index for index, task in enumerate(tasks)
+            if stage_statuses.get(task.get("id")) != "done"
+        ),
+        None,
+    )
+    execution_fields = (
+        "write_scope", "required_tests", "verify_commands", "reviewer_focus",
+        "plan_contracts", "review_budget",
+    )
+    if first_recording:
+        for task in tasks:
+            for field in execution_fields:
+                if field in task:
+                    raise SystemExit(
+                        f"decomposition task {task['id']}: initial recording must "
+                        f"be fully skeletal and must not declare {field}; re-record "
+                        "frontier execution detail after the skeleton is protected."
+                    )
+    appended_tasks: list[dict] = []
+    if not first_recording:
+        prior_task_list = [
+            task for task in prior_decomposition.get("tasks") or []
+            if isinstance(task, dict)
+        ]
+        prior_graph = _task_graph(prior_task_list)
+        if _task_graph(tasks[:len(prior_graph)]) != prior_graph:
+            raise SystemExit(
+                "decomposition task graph is frozen after initial recording; "
+                "existing task ids, order, and dependencies must remain an exact "
+                "prefix"
+            )
+        appended_tasks = tasks[len(prior_graph):]
+        for task in appended_tasks:
+            for field in execution_fields:
+                if field in task:
+                    raise SystemExit(
+                        f"decomposition task {task['id']}: an appended task must "
+                        f"be skeletal and must not declare {field}; re-record "
+                        "frontier execution detail after the task is protected."
+                    )
+    if frontier_index is not None:
+        for task in tasks[frontier_index + 1:]:
+            if stage_statuses.get(task.get("id")) == "done":
+                continue
+            for field in execution_fields:
+                if field in task:
+                    raise SystemExit(
+                        f"decomposition task {task['id']}: pending non-frontier "
+                        f"task must not declare {field}; author execution detail "
+                        "when the task reaches the frontier."
+                    )
     backfilled_stage_digest = False
     for stage in stages_data.get("stages") or []:
         if stage.get("status") not in {"active", "done"}:
@@ -319,10 +405,19 @@ with delegation_exclusion(
                 "before changing the task list."
             )
         if stage.get("status") == "done":
+            prior = prior_tasks.get(task_id)
+            if (
+                prior is None
+                or _full_contract_digest(prior) != _full_contract_digest(new)
+            ):
+                raise SystemExit(
+                    f"decomposition task {task_id}: a completed stage's full "
+                    "contract cannot be changed or removed; add a new follow-up "
+                    "task instead."
+                )
             recorded_digest = stage.get("task_sha256")
             new_digest = task_digest(new)
             if not recorded_digest:
-                prior = prior_tasks.get(task_id)
                 if prior is None or task_digest(prior) != new_digest:
                     raise SystemExit(
                         f"decomposition task {task_id}: a completed stage's "

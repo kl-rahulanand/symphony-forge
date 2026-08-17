@@ -1,7 +1,0 @@
-{
-  "generated_by": "implementer",
-  "outcome": "The harness survives any console code page: every text I/O boundary in factory/scripts names its encoding explicitly per decision 0043 \u2014 diagnostics degrade gracefully, evidence fails loudly, digest paths stay bytes \u2014 with spawned workers contracted to UTF-8 and stdin read strictly. The convention is machine-enforced by check_encoding_hygiene (AST-based, value-validating, seeded self-tests) on every PR, and CI proves the flows under a forced non-UTF-8 locale on ubuntu and the real ANSI code page on Windows, including a non-cp1252 glyph round-tripping the delegation handoff.",
-  "issue": "FORGE-WIN-ENC",
-  "commit": "a25e56d6f80bed7a4324473bbc517903dd6c2979",
-  "recorded_at": "2026-08-13T19:31:01+00:00"
-}

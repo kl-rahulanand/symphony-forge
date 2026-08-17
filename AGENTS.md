@@ -36,9 +36,9 @@ Codex executes exploration, implementation, testing, and review. `./forge delega
 0b. prototype freely; save and confirm specs as capabilities emerge
 0c. derive the roadmap from confirmed specs
 1. record client sign-off (the spec/roadmap gate is checked now)
-2. plan one roadmap story and generate its decomposition
+2. plan one roadmap story and record its ordered task list
 3. wait for approval
-4. implement one bounded task via `./forge delegate`; measure under decision 0018
+4. per task: plan-mode JIT contract → re-record → grill → stage start → `./forge delegate`; measure under 0018
 5. run deterministic verify
 6. run one autoreview pass (three lenses: quality, performance, security)
 7. run the functional check when the decomposition says `user_facing: true`
@@ -102,7 +102,7 @@ A task is not PR-ready until all of these exist:
 - Do not decompose by document file or arbitrary file count.
 - Do not bypass `verify.py` with ad hoc validation commands.
 - Evidence enters `.factory/` only via schema-validated recorders (pinned `generated_by`), never by hand.
-- Narration budget (conduct §8): one line per state change; findings always; process chatter never.
+- Narration budget (conduct §8): one line per state change; findings and refusals always in full; process chatter never.
 - Review = ONE autoreview pass run by the orchestrating session directly —
   never a Codex review job (decision 0011), never nested reviewers.
 - One worktree/story; sequential tasks; dependency-ready stories may parallelize (0002). Delegation/proof commands are trusted inputs; observed descendant cleanup is not hostile-code containment.

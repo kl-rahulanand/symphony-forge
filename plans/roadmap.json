@@ -704,10 +704,95 @@
         "FORGE-WIN-3"
       ],
       "spec": "docs/specs/windows-zero-setup.md"
+    },
+    {
+      "key": "FORGE-ACC-1",
+      "title": "JIT frontier is enforced, not advisory",
+      "story": "As an orchestrator, I want stage start and forge next to refuse or route around an unauthored or ungrilled frontier task so that no implementation begins before its contract exists and survived an independent grill",
+      "acceptance_criteria": [
+        "record_decomposition_from_json.py refuses execution detail (write_scope, required_tests, verify_commands) on any task after the earliest pending leaf and accepts it on the frontier task",
+        "a shared require_ready_task() makes stage start and delegate both refuse an incomplete contract or missing/stale grill; an active stage with empty write_scope refuses instead of silently degrading to read-only; explicit --read-only still passes",
+        "forge next reports author-contract / grill / stage-start / delegate as the single next action per task state",
+        "docs/FACTORY.md, WORKFLOW.md, and factory/prompts/decomposer.md state the enforced JIT contract with no upfront-contract contradiction"
+      ],
+      "order": 33,
+      "status": "done",
+      "epic": "accountable-engineering",
+      "skill": "backend",
+      "depends_on": [],
+      "spec": "docs/specs/accountable-engineering-loop.md",
+      "completed_at": "2026-08-14T02:56:09+00:00",
+      "history": ".factory/history/FORGE-ACC-1/",
+      "outcome": "Implementation can no longer begin before its contract exists and survived an independent grill: the decomposition recorder refuses execution detail on future tasks, a shared readiness gate makes stage start and delegate refuse incomplete or ungrilled frontier contracts (and the silent empty-scope read-only downgrade is gone), and forge next walks the dev through the JIT loop one action at a time - enter plan mode and author, grill, start, delegate. The docs now say what the gates enforce. A dev following the rail cannot skip contract authoring or grilling by accident."
+    },
+    {
+      "key": "FORGE-ACC-2",
+      "title": "Grills carry proof, diffs stay reviewable",
+      "story": "As an orchestrator, I want task grills to require repository-grounded proofs bound to an internally derived digest, and stage done to refuse over-budget diffs, so that empty rubber-stamp grills and unreviewable changes stop being representable",
+      "acceptance_criteria": [
+        "a task grill missing inspected_refs (existing paths), current_flow, a total criteria_map, a keep/split/block decision, or the declare-or-empty new_abstractions field is refused; pass with split/block refused; block without an escalation packet refused",
+        "the recorder derives the grill digest from the full task contract, the approved-plan digest excluding appended assumptions, and a product-tree hash excluding .factory/ and plans/; caller-supplied --task-digest is removed; contract, plan, and product-tree changes stale the grill while .factory/ and plans/ commits do not",
+        "the frontier task's criteria_map lands as plan_contracts so the existing FORGE-REV-2 quality review verdicts each criterion",
+        "stage done refuses a diff over the task's review budget (default 8 files / 400 lines excluding .factory/ and plans/; lower free, higher needs a written reason) and the composed brief states the budget",
+        "the board renders the in-flight story's task rows (state, grill freshness, budget usage) from the same derivation forge next uses"
+      ],
+      "order": 34,
+      "status": "done",
+      "epic": "accountable-engineering",
+      "skill": "backend",
+      "depends_on": [
+        "FORGE-ACC-1"
+      ],
+      "spec": "docs/specs/accountable-engineering-loop.md",
+      "completed_at": "2026-08-14T13:44:37+00:00",
+      "history": ".factory/history/FORGE-ACC-2/",
+      "outcome": "A task can no longer be implemented on an unproven plan: its grill must show what was inspected, how the system currently flows, how every acceptance criterion will be proven, what new abstractions are justified, and which resolutions the operator personally chose (recorded question-options-chosen rounds) or a document dictated (named citations) - and the recorder derives the binding itself from the contract, the approved plan, and the product tree, so nothing self-asserted survives an edit. Diffs stay reviewable: stage done refuses more than 8 files/400 lines unless a written reason raised it, the task graph is frozen except for skeletal appends (so splits work), completed contracts are immutable, and the board now shows every task's state, grill freshness, and budget live."
+    },
+    {
+      "key": "FORGE-ACC-3",
+      "title": "Approval and closeout integrity",
+      "story": "As an orchestrator, I want plan approval, per-stage review, commits, branch review, and closeout artifacts bound and ordered by deterministic gates so that an edited plan, an unreviewed commit, an incoherent review, or an out-of-order artifact cannot reach pr_ready",
+      "acceptance_criteria": [
+        "approved plan save stores approved_plan_sha256 (excluding the assumptions appendix); implementation gates rederive it; plan approve refuses without a fresh matching plan grill on an awaiting plan; an edited plan requires re-grill and re-approval",
+        "the task grill records approved_by stamped from the operator's sanctioned rounds AFTER the grill passes; require_ready_task refuses a grill without the approval stamp, bound to the same grounding digest, so an approved-then-edited contract needs re-grill and re-approval",
+        "forge next planning routes a pre-draft requirements round: before the story plan is drafted, the confirmed spec is re-grilled against current repository state with rounds via AskUserQuestion, and drafting is instructed only after that pass records",
+        "initial decomposition recording refuses execution detail (including reviewer_focus and plan_contracts) on every task; later recordings freeze the initial id/order/dependency skeleton; completed task contracts are immutable under a full-contract digest",
+        "a clean local-review stamp bound to stage id, task digest, brief SHA, baseline, and pre-commit diff digest is recorded in stages.json; stage done refuses a missing/stale stamp, uncommitted or staged product changes, or an empty committed stage delta",
+        "the three review lenses carry one review_run_id bound to a fresh review-brief --all SHA and the branch diff digest; incoherent lens sets are refused",
+        "closeout is ordered by gates: all stages done, then branch review, then verify, then functional when user_facing, then outcome, then pr_ready; pr_ready additionally requires a clean product worktree/index, repo-kind-aware evidence exclusions, and the outcome stamp on the same commit",
+        "opening a lite, quickfix, or degraded write window while a stage is active refuses"
+      ],
+      "order": 35,
+      "status": "pending",
+      "epic": "accountable-engineering",
+      "skill": "backend",
+      "depends_on": [
+        "FORGE-ACC-2"
+      ],
+      "spec": "docs/specs/accountable-engineering-loop.md"
+    },
+    {
+      "key": "FORGE-CFS-1",
+      "title": "Story state stops conflicting across PRs",
+      "story": "As an orchestrator running parallel story worktrees, I want all recorded story evidence scoped per story with no archive move, no shared append ledger, and a merge-survivable hook, so that overlapping PRs merge without .factory conflicts and a conflicted tree can always be repaired through sanctioned commands",
+      "acceptance_criteria": [
+        "two story worktrees recording concurrently produce zero overlapping .factory paths and a merge simulation in the gate tests yields no .factory conflicts",
+        "pr_ready ships in place with no archive move; shipped evidence stays at its recorded story-scoped paths and forge history and the board read it",
+        "events are one file each (0022 pattern); forge history reads legacy events.jsonl and per-event files together; no merge-driver dependency remains",
+        "the active-story pointer is worktree-local; phase derives from story artifacts; no tracked run.json authority remains",
+        "forge next auto-heals the roadmap after a merge commit",
+        "with unmerged index entries the hook permits git-native resolution of exactly those paths and refuses content hand-writes; an unparseable factory_lib or state file engages a static deny-list fallback instead of crashing"
+      ],
+      "order": 36,
+      "status": "pending",
+      "epic": "accountable-engineering",
+      "skill": "backend",
+      "depends_on": [],
+      "spec": "docs/specs/conflict-free-story-state.md"
     }
   ],
   "generated_by": "human",
-  "updated_at": "2026-08-13T13:40:56+00:00",
+  "updated_at": "2026-08-14T13:44:37+00:00",
   "epics": [
     {
       "id": "symphony-forge",
@@ -763,6 +848,14 @@
       "objective": "Bind review to the plan: tasks declare plan contracts, review verdicts each one with evidence, and pr-ready refuses until every contract is verified implemented.",
       "source_refs": [
         "docs/specs/plan-contract-review.md"
+      ]
+    },
+    {
+      "id": "accountable-engineering",
+      "title": "Accountable engineering loop",
+      "objective": "Enforce decision 0032 end to end: JIT frontier contracts gated at stage start, evidence-backed independent task grills, internally derived grounding digests, bounded reviewable diffs, and task-level board visibility \u2014 agents do the heavy lifting, humans decide only authority questions.",
+      "source_refs": [
+        "docs/specs/accountable-engineering-loop.md"
       ]
     }
   ]

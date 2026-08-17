@@ -346,8 +346,9 @@ mutable execution twin of the re-recordable decomposition (decision 0007),
 one stage per leaf task in execution order. Decision 0032 makes the pre-work
 sequence a JIT contract loop for every pending task:
 
-1. author the next task's full contract against the approved plan and the real
-   repository state left by completed dependencies
+1. enter plan mode (decision 0029; `factory/prompts/planner.md`) and author the
+   next task's full contract against the approved plan and the real repository
+   state left by completed dependencies
 2. re-record the decomposition with that contract
 3. run `factory/prompts/griller.md` with `--gate task`, resolve its findings,
    and record the pass for that id and current task-contract digest:
@@ -365,6 +366,9 @@ sequence a JIT contract loop for every pending task:
    skill — never as a Codex handoff, which re-triggers the same skill one
    indirection deeper) — a stage commits only clean
 10. commit, then `forge stage done <id>`
+
+`forge next` derives this frontier from the same readiness gate and reports
+exactly one of author contract, task grill, stage start, or delegate.
 
 Per-stage local reviews are pre-commit hygiene and record nothing; the ONE
 branch-wide autoreview at the review phase remains the only review gate and

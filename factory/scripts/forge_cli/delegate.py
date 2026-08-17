@@ -34,15 +34,15 @@ from pathlib import Path
 
 from factory_lib import (
     git_control_dir, load_json, now_iso, protected_decomposition_state_path,
-    repo_root, require_task_grill, run_state_path, safe_factory_append,
-    safe_factory_write_bytes, sha256_of, validate_payload,
+    repo_root, require_ready_task, run_state_path, safe_factory_append,
+    safe_factory_write_bytes, sha256_of, task_digest, validate_payload,
 )
 
 from .common import fail
 from .decisions import decision_records
 from .events import append_event
 from .lessons import relevant_lessons
-from .stages import load_stages, task_digest
+from .stages import load_stages, review_budget
 
 SAFE_TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 # A brief is read by a model, so an inlined rule set that runs to thousands of
@@ -923,6 +923,11 @@ def _section(title: str, body: str) -> str:
 def compose_brief(base: Path, task: dict, *, write: bool, user_facing: bool,
                   story: str) -> str:
     scope = task.get("write_scope") or []
+    try:
+        max_files, max_lines, _reason = review_budget(task)
+    except ValueError as exc:
+        fail(f"{task.get('id', '(unknown)')} carries an invalid review_budget "
+             f"({exc}); re-record the decomposition before delegating")
     lines = [
         f"# Brief — {task['id']}: {task.get('title', '')}",
         "",
@@ -934,6 +939,13 @@ def compose_brief(base: Path, task: dict, *, write: bool, user_facing: bool,
         "and the lessons ledger. Do not go looking for the rules elsewhere; if "
         "something needed is missing, raise a signal instead of guessing "
         "(`./forge signal raise`).",
+        "",
+        f"Review budget: {max_files} files / {max_lines} changed lines "
+        "(additions + deletions), excluding `.factory/` and `plans/`. If the "
+        "work will exceed it, stop and return incomplete so the orchestrator "
+        "can split the task before more work.",
+        "Narration budget: one line per state change, findings and refusals "
+        "always in full, process chatter never (conduct §8).",
     ]
     body = "\n".join(lines) + "\n"
     body += _section("Objective", task.get("objective", ""))
@@ -1189,12 +1201,15 @@ def cmd_delegate(args: argparse.Namespace) -> None:
     stage = next((s for s in load_stages(base).get("stages", [])
                   if s.get("id") == args.id), {})
     scope = task.get("write_scope") or []
-    # Derived, not typed: an active stage with somewhere to write is a write
-    # run. --read-only is the explicit exception, for exploration.
-    write = bool(stage.get("status") == "active" and scope) and not args.read_only
+    # Derived, not typed: an active stage is a write run. --read-only is the
+    # explicit exception for exploration; an empty scope is an incomplete
+    # contract, not an implicit read-only downgrade.
+    active = stage.get("status") == "active"
+    if active and not args.read_only:
+        task = require_ready_task(base, args.id)
+        scope = task.get("write_scope") or []
+    write = bool(active and scope) and not args.read_only
     task_sha256_value = task_digest(task)
-    if write:
-        require_task_grill(base, args.id, task_sha256_value)
     if write and args.background:
         fail("background write delegation cannot satisfy a measured stage: the "
              "worker could keep writing after stage close. Run it in the foreground, "

@@ -9,7 +9,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-from factory_lib import load_json, now_iso, parse_sections, repo_root, run_state_path
+from factory_lib import (
+    load_json, now_iso, parse_sections, repo_root, run_state_path, task_rows,
+)
 from record_signoff import REQUIRED_BRIEF_HEADINGS
 
 from . import events
@@ -50,25 +52,39 @@ TASK_NARRATIVE = ("objective", "acceptance_criteria", "reviewer_focus",
                   "write_scope", "verify_commands", "required_tests", "dependencies")
 
 
-def merge_task_detail(decomposition: dict, stages: list[dict]) -> list[dict]:
+def merge_task_detail(
+    decomposition: dict, stages: list[dict], derived_rows: list[dict] | None = None,
+) -> list[dict]:
     """The stage tracker knows what is DONE; the decomposition knows what the
     task was FOR. Neither alone answers "what is this task?", and the tracker
     deliberately keeps only id/title/status so the two never disagree about
     progress — so they are joined here, at read time, by task id."""
-    planned = {t.get("id"): t for t in decomposition.get("tasks", [])}
+    planned_tasks = decomposition.get("tasks", [])
+    planned = {t.get("id"): t for t in planned_tasks}
+    stage_by_id = {stage.get("id"): stage for stage in stages}
+    derived = {row.get("id"): row for row in (derived_rows or [])}
     tasks = []
-    for stage in stages:
+    sources = (
+        [stage_by_id.get(task.get("id"), {
+            "id": task.get("id"), "title": task.get("title"),
+        }) for task in planned_tasks]
+        if derived_rows is not None else stages
+    )
+    for stage in sources:
         task = {"id": stage.get("id"), "title": stage.get("title"),
                 "status": stage.get("status", "pending"),
                 "started_at": stage.get("started_at"),
                 "completed_at": stage.get("completed_at")}
         source = planned.get(stage.get("id"), {})
         task.update({field: source[field] for field in TASK_NARRATIVE if field in source})
+        task.update(derived.get(stage.get("id"), {}))
         tasks.append(task)
     return tasks
 
 
-def _plan_evidence(base: Path, plan: dict | None) -> tuple[dict | None, dict, list]:
+def _plan_evidence(
+    base: Path, plan: dict | None, derived_rows: list[dict] | None = None,
+) -> tuple[dict | None, dict, list]:
     """Stage progress, gate evidence, and the story's real task list.
 
     Tasks exist only once a story's plan is approved and decomposed, so an
@@ -89,7 +105,9 @@ def _plan_evidence(base: Path, plan: dict | None) -> tuple[dict | None, dict, li
             "done": sum(1 for stage in stages if stage.get("status") == "done"),
             "total": len(stages),
         }
-    tasks = merge_task_detail(load_json(root / "decomposition.json", default={}), stages)
+    tasks = merge_task_detail(
+        load_json(root / "decomposition.json", default={}), stages, derived_rows,
+    )
     # The same predicates pr_ready gates on: a tick here must mean the gate
     # would open, not merely that a file is on disk.
     recorded = load_json(root / "tests.json", default={})
@@ -256,6 +274,8 @@ def aggregate_state(base: Path) -> dict:
     ]
     spec_status = {record["path"]: record.get("status", "draft") for record in specs}
     run = load_json(base / ".factory" / "run.json", default={})
+    active = run.get("issue_key")
+    live_task_rows = task_rows(base) if active else []
     record_origin = load_json(base / ".factory" / "record-origin.json", default=None)
     stages = _stage_summary(base)
     story_pr_links = pr_links(base)
@@ -269,7 +289,9 @@ def aggregate_state(base: Path) -> dict:
     for item in items:
         story = dict(item)
         plan = plan_by_story.get(item.get("key"))
-        progress, evidence, tasks = _plan_evidence(base, plan)
+        progress, evidence, tasks = _plan_evidence(
+            base, plan, live_task_rows if item.get("key") == active else None,
+        )
         story["ready_to_plan"] = item.get("key") in frontier
         story["plan"] = plan
         story["tasks"] = tasks
@@ -460,6 +482,7 @@ def story_detail(base: Path, key: str) -> dict | None:
     detail = {"key": key, "project": project_identity(base), "epic": epic,
               "story": story, "plan": plan, "plan_body": plan_body,
               "spec": spec, "evidence": evidence}
+    detail["task_rows"] = task_rows(base) if active == key else []
     detail["tasks"] = task_dossiers(detail)
     detail["readiness"] = approval_readiness(base, detail)
     return detail
@@ -513,7 +536,7 @@ def task_dossiers(detail: dict) -> list[dict]:
             recorded_tests.extend(entry.get("tests_added_or_updated") or [])
 
     dossiers = []
-    for task in merge_task_detail(decomposition, stages):
+    for task in merge_task_detail(decomposition, stages, detail.get("task_rows")):
         required = task.get("required_tests") or []
         # A required test counts as proven only if a recorded artifact names it;
         # "tests.json exists" is not evidence that THIS task was covered. Entries

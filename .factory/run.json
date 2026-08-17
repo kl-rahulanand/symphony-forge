@@ -1,17 +1,3 @@
 {
-  "issue_key": "FORGE-WIN-ENC",
-  "title": "No code page can break the harness (encoding hardening)",
-  "tracker": "linear",
-  "branch": "feat/FORGE-WIN-ENC-no-code-page-can-break-the-harness-encoding-hardening",
-  "phase": "planning",
-  "plan_status": "approved",
-  "decomposition_status": "recorded",
-  "implementation_status": "pending",
-  "tests_status": "recorded",
-  "verify_status": "passed",
-  "review_status": "in-progress",
-  "created_at": "2026-08-13T13:40:56+00:00",
-  "updated_at": "2026-08-13T19:31:54+00:00",
-  "plan_file": "plans/active/FORGE-WIN-ENC-no-code-page-can-break-the-harness-encoding-hardening.md",
-  "story": "FORGE-WIN-ENC"
+  "phase": "shipped"
 }

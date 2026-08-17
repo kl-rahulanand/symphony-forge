@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -942,14 +943,14 @@ def require_grill(
 def require_task_grill(
     root: Path,
     task_id: str,
-    expect_digest_value: str,
+    task: dict,
 ) -> None:
-    """Require a passing grill bound to the current task contract digest."""
+    """Require a passing grill bound to the current grounding inputs."""
     path = factory_dir(root) / "grills" / "tasks" / f"{task_id}.json"
     data = load_json(path, default={})
     record_command = (
         "python3 factory/scripts/record_grill_from_json.py --gate task "
-        f"--task {task_id} --task-digest {expect_digest_value}"
+        f"--task {task_id}"
     )
     if not data:
         raise SystemExit(
@@ -967,11 +968,264 @@ def require_task_grill(
             f".factory/grills/tasks/{task_id}.json has no commit stamp — re-record "
             f"with current tooling using `{record_command}`."
         )
-    if data.get("input_sha256") != expect_digest_value:
+    if data.get("input_sha256") != grounding_digest(root, task):
         raise SystemExit(
-            f"the {task_id} task grill is STALE — it was not recorded against the "
-            f"current task contract. Re-grill and record `{record_command}`."
+            f"the {task_id} task grill is STALE — its grounding inputs changed. "
+            f"Re-grill and record `{record_command}`; --task-digest was removed "
+            "because the digest is derived from the protected contract, approved "
+            "plan, and product tree."
         )
+
+
+def task_digest(task: dict) -> str:
+    """Return the unchanged four-field stage measurement digest."""
+    payload = json.dumps(
+        {
+            key: task.get(key)
+            for key in (
+                "write_scope",
+                "required_tests",
+                "verify_commands",
+                "acceptance_criteria",
+            )
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def plan_digest_without_assumptions(path: Path) -> str:
+    """Hash the approved plan while excluding implementation-time appendices."""
+    text = path.read_text(encoding="utf-8")
+    approved_text = text.partition("\n## Implementation Assumptions")[0]
+    return hashlib.sha256(approved_text.encode()).hexdigest()
+
+
+def product_tree_digest(root: Path) -> str:
+    """Hash the deterministic index blob list, excluding workflow-only paths."""
+    proc = subprocess.run(
+        ["git", "ls-files", "--stage", "-z"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        env=clean_git_env(),
+        encoding="utf-8",
+        errors="surrogateescape",
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            "cannot derive the task grounding digest from the Git index: "
+            + proc.stderr.strip()
+        )
+    blobs: list[tuple[str, str]] = []
+    for entry in proc.stdout.split("\0"):
+        if not entry:
+            continue
+        metadata, path = entry.split("\t", 1)
+        if path.startswith((".factory/", "plans/")):
+            continue
+        fields = metadata.split()
+        blobs.append((path, fields[1]))
+    payload = json.dumps(sorted(blobs), separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def grounding_digest(root: Path, task: dict) -> str:
+    """Bind a task grill to its full contract, approved plan, and product tree."""
+    decomposition = load_json(protected_decomposition_state_path(root), default={})
+    plan_file = decomposition.get("plan_file")
+    if not isinstance(plan_file, str) or not plan_file.strip():
+        plan_file = load_json(run_state_path(root), default={}).get("plan_file")
+    if not isinstance(plan_file, str) or not plan_file.strip():
+        raise SystemExit(
+            "cannot derive the task grounding digest: the protected decomposition "
+            "does not name its approved plan"
+        )
+    plan = (root / plan_file).resolve()
+    try:
+        plan.relative_to(root.resolve())
+    except ValueError:
+        raise SystemExit(
+            f"cannot derive the task grounding digest: plan path escapes the repo: "
+            f"{plan_file!r}"
+        )
+    if not plan.is_file():
+        raise SystemExit(
+            f"cannot derive the task grounding digest: approved plan {plan_file!r} "
+            "does not exist"
+        )
+    payload = json.dumps(
+        {
+            "contract": task,
+            "plan_sha256": plan_digest_without_assumptions(plan),
+            "product_tree_sha256": product_tree_digest(root),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+_TASK_CONTRACT_FIELDS = (
+    "write_scope",
+    "required_tests",
+    "verify_commands",
+    "reviewer_focus",
+)
+
+
+def _task_contract_complete(task: dict) -> bool:
+    return all(
+        value and (not isinstance(value, str) or value.strip())
+        for value in (task.get(field) for field in _TASK_CONTRACT_FIELDS)
+    )
+
+
+def _task_grill_fresh(root: Path, task: dict, grill: dict) -> bool:
+    return bool(
+        grill.get("verdict") == "pass"
+        and grill.get("commit")
+        and grill.get("input_sha256") == grounding_digest(root, task)
+    )
+
+
+def task_rows(root: Path) -> list[dict]:
+    """Derive every live task row from the same inputs as frontier routing."""
+    tasks = load_json(
+        protected_decomposition_state_path(root), default={}
+    ).get("tasks", [])
+    stages = load_json(git_control_dir(root) / "stages.json", default={})
+    stage_by_id = {
+        stage.get("id"): stage
+        for stage in stages.get("stages", [])
+        if isinstance(stage, dict)
+    }
+    rows = []
+    for task in tasks:
+        task_id = task.get("id")
+        stage = stage_by_id.get(task_id, {})
+        grill = load_json(
+            factory_dir(root) / "grills" / "tasks" / f"{task_id}.json",
+            default={},
+        )
+        fresh = _task_grill_fresh(root, task, grill) if grill else False
+        status = stage.get("status")
+        if status == "done":
+            state = "done"
+        elif status == "active":
+            state = "active"
+        elif not _task_contract_complete(task):
+            state = "skeleton"
+        else:
+            state = "grilled" if fresh else "ready"
+
+        budget = None
+        if state == "active":
+            from forge_cli.stages import (
+                WORKFLOW_PATHS, _changed_line_count, changed_paths,
+                review_budget, stage_baseline,
+            )
+
+            max_files, max_lines, _reason = review_budget(task)
+            base_sha = stage_baseline(root, stage)
+            product = [
+                path for path in changed_paths(
+                    root, base_sha, stage.get("dirty_at_start", {})
+                )
+                if not path.startswith(WORKFLOW_PATHS)
+            ] if base_sha else []
+            budget = {
+                "used": {
+                    "files": len(product),
+                    "lines": _changed_line_count(root, base_sha, product)
+                    if base_sha else 0,
+                },
+                "limit": {"files": max_files, "lines": max_lines},
+            }
+        rows.append({
+            "id": task_id,
+            "state": state,
+            "grill_freshness": (
+                "fresh" if fresh else "stale" if grill else "missing"
+            ),
+            "budget": budget,
+        })
+    return rows
+
+
+def task_frontier_state(root: Path) -> tuple[str, dict] | None:
+    """Return the next JIT action and earliest unfinished task, without raising."""
+    tasks = load_json(
+        protected_decomposition_state_path(root), default={}
+    ).get("tasks", [])
+    stages = load_json(git_control_dir(root) / "stages.json", default={})
+    stage_by_id = {
+        stage.get("id"): stage
+        for stage in stages.get("stages", [])
+        if isinstance(stage, dict)
+    }
+    frontier = next(
+        (
+            candidate
+            for candidate in tasks
+            if stage_by_id.get(candidate.get("id"), {}).get("status") != "done"
+        ),
+        None,
+    )
+    if frontier is None:
+        return None
+    task_id = frontier.get("id")
+
+    if not _task_contract_complete(frontier):
+        return "author-contract", frontier
+
+    grill = load_json(
+        factory_dir(root) / "grills" / "tasks" / f"{task_id}.json",
+        default={},
+    )
+    if _task_grill_fresh(root, frontier, grill):
+        stage = stage_by_id.get(task_id, {})
+        state = "delegate" if stage.get("status") == "active" else "stage-start"
+        return state, frontier
+    return "grill", frontier
+
+
+def require_ready_task(root: Path, task_id: str) -> dict:
+    """Require the JIT execution contract and its fresh, passing grill."""
+    tasks = load_json(
+        protected_decomposition_state_path(root), default={}
+    ).get("tasks", [])
+    task = next(
+        (candidate for candidate in tasks if candidate.get("id") == task_id),
+        None,
+    )
+    if task is None:
+        raise SystemExit(
+            f"{task_id!r} is not a task in the protected decomposition."
+        )
+
+    frontier_state = task_frontier_state(root)
+    if frontier_state is None or frontier_state[1].get("id") != task_id:
+        frontier_id = frontier_state[1].get("id") if frontier_state else "none"
+        raise SystemExit(
+            f"{task_id} is not the earliest unfinished task ({frontier_id}); "
+            "finish tasks in decomposition order."
+        )
+
+    for field in _TASK_CONTRACT_FIELDS:
+        value = task.get(field)
+        if not value or (isinstance(value, str) and not value.strip()):
+            raise SystemExit(
+                f"{task_id} task contract is incomplete: {field} is empty. "
+                "Author the JIT contract and re-record it with "
+                "`python3 factory/scripts/record_decomposition_from_json.py "
+                f"--input <json>`. `forge delegate {task_id} --read-only` "
+                "remains available for exploration only."
+            )
+
+    require_task_grill(root, task_id, task)
+    return task
 
 
 def changed_since(root: Path, stamp: str, prefixes: tuple[str, ...]) -> list[str]:

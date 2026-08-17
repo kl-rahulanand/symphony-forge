@@ -60,11 +60,18 @@ def unrunnable_reason(command: str) -> str | None:
         return "empty"
     # Syntax first: `git status |` resolves `git` and would otherwise pass here
     # only to fail forever at stage close with a shell parse error.
-    syntax = subprocess.run(["bash", "-n", "-c", text],
-                            capture_output=True, text=True,
-                            encoding="utf-8", errors="replace")
-    if syntax.returncode != 0:
-        return f"is not valid shell ({syntax.stderr.strip().splitlines()[-1:] or ['parse error']})"
+    # bash may be absent, or be the Windows System32 WSL stub, which exits
+    # nonzero with EMPTY stderr for any input. A real parse error always
+    # writes to stderr, so an empty-stderr failure means the probe itself is
+    # unusable -- fall through to the shlex+argv standard below.
+    try:
+        syntax = subprocess.run(["bash", "-n", "-c", text],
+                                capture_output=True, text=True,
+                                encoding="utf-8", errors="replace")
+    except OSError:
+        syntax = None
+    if syntax is not None and syntax.returncode != 0 and syntax.stderr.strip():
+        return f"is not valid shell ({syntax.stderr.strip().splitlines()[-1:]})"
     try:
         tokens = shlex.split(text)
     except ValueError as exc:                    # unbalanced quotes
