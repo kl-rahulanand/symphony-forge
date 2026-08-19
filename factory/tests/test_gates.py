@@ -34,6 +34,7 @@ sys.path.insert(0, str(HARNESS / "factory" / "scripts"))
 from factory_lib import (
     grounding_digest, require_task_grill, task_frontier_state, task_rows,
 )
+from forge_cli.events import load_events
 from forge_cli.stages import task_digest, write_stages
 from record_signoff import REQUIRED_BRIEF_HEADINGS
 
@@ -451,7 +452,11 @@ def save_plan_raw(repo: Path, tmp_path: Path) -> tuple[int, str]:
 
 def write_passing_artifacts(repo: Path, commit: str | None = None) -> None:
     sha = commit or head(repo)
-    f = repo / ".factory"
+    lib = load_factory_lib(repo)
+    key = run_state(repo).get("issue_key", "")
+    f = (lib.story_dir(repo, key)
+         if key and lib.story_uses_scoped_layout(repo, key)
+         else repo / ".factory")
     control = Path(git(repo, "rev-parse", "--absolute-git-dir")) / "forge"
     control.mkdir(parents=True, exist_ok=True)
     protected_decomposition = control / "decomposition.json"
@@ -493,7 +498,18 @@ def write_passing_artifacts(repo: Path, commit: str | None = None) -> None:
 
 
 def run_state(repo: Path) -> dict:
-    return json.loads((repo / ".factory" / "run.json").read_text())
+    lib = load_factory_lib(repo)
+    return lib.load_json(lib.run_state_path(repo))
+
+
+def story_state(repo: Path, key: str = "ENG-1") -> Path:
+    return repo / ".factory" / "stories" / key
+
+
+def make_legacy_story(repo: Path, key: str = "ENG-1") -> None:
+    (repo / ".factory" / "run.json").write_text(json.dumps(run_state(repo)))
+    (delegation_ledger(repo).parent / "run.json").unlink(missing_ok=True)
+    shutil.rmtree(story_state(repo, key))
 
 
 def signed_off(repo: Path) -> bool:
@@ -502,6 +518,308 @@ def signed_off(repo: Path) -> bool:
     match = re.search(r'^signoff_record:\s*"([^"]*)"', (repo / "harness.yaml").read_text(),
                       re.MULTILINE)
     return bool(match and match.group(1))
+
+
+def test_new_story_artifacts_record_under_story_dir(repo, tmp_path):
+    sign_off(repo)
+    code, out = intake(repo)
+    assert code == 0, out
+    scoped = repo / ".factory" / "stories" / "ENG-1"
+    assert scoped.is_dir()
+
+    plan = repo / "plans" / "active" / "ENG-1-evidence-paths.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    plan.write_text("---\nstatus: approved\n---\n\n" + PLAN_BODY)
+    state = run_state(repo)
+    state.update({
+        "plan_file": plan.relative_to(repo).as_posix(),
+        "plan_status": "approved",
+        "story": "ENG-1",
+    })
+    lib = load_factory_lib(repo)
+    lib.dump_json(lib.run_state_path(repo), state)
+
+    code, out = record_grill(repo, "plan", digest_of=plan)
+    assert code == 0, out
+    record_skeleton_then_frontier(repo, DECOMP["tasks"])
+
+    legacy_tests = repo / ".factory" / "tests.json"
+    legacy_tests.write_text(json.dumps({"functional": {"summary": "legacy proof"}}))
+
+    testing = {
+        "generated_by": "implementer",
+        "status": "passed",
+        "summary": "focused evidence-path proof passed",
+        "blocking_findings": [],
+        "commands_run": ["pytest"],
+        "skills_used": ["emil-design-eng", "frontend-design"],
+    }
+    code, out = run(
+        repo, "record_test_from_json.py", "--kind", "automated",
+        stdin=json.dumps(testing),
+    )
+    assert code == 0, out
+    recorded_tests = json.loads((scoped / "tests.json").read_text())
+    assert recorded_tests["functional"]["summary"] == "legacy proof"
+    assert json.loads(legacy_tests.read_text()) == {
+        "functional": {"summary": "legacy proof"},
+    }
+
+    review = {
+        "generated_by": "autoreview",
+        "score": 9,
+        "summary": "story evidence paths are consistent",
+        "blocking_findings": [],
+        "skills_used": ["review-animations"],
+    }
+    for aspect in ("quality", "performance", "security"):
+        code, out = run(
+            repo, "record_review_from_json.py", "--aspect", aspect,
+            stdin=json.dumps(review),
+        )
+        assert code == 0, out
+
+    code, out = run(repo, "verify.py", env={
+        "FACTORY_STRUCTURAL_CMD": "true",
+        "FACTORY_TYPECHECK_CMD": "true",
+        "FACTORY_TEST_CMD": "true",
+    })
+    assert code == 0, out
+
+    expected = (
+        "decomposition.json",
+        "grills/plan.json",
+        "tests.json",
+        "reviews/quality.json",
+        "reviews/performance.json",
+        "reviews/security.json",
+        "verify.json",
+    )
+    for name in expected:
+        assert (scoped / name).is_file(), name
+        if name != "tests.json":
+            assert not (repo / ".factory" / name).exists(), name
+
+
+def test_intake_writes_untracked_pointer_zero_tracked_run_json(repo, tmp_path):
+    sign_off(repo)
+    ensure_story(repo, "ENG-1", "Invoices")
+    ensure_story(repo, "ENG-2", "Payments")
+    git(repo, "add", "-A")
+    if git(repo, "diff", "--cached", "--name-only"):
+        git(repo, "commit", "-q", "-m", "prepare parallel stories")
+
+    worktrees = (
+        (tmp_path / "invoices", "story-invoices", "ENG-1", "Invoices"),
+        (tmp_path / "payments", "story-payments", "ENG-2", "Payments"),
+    )
+    tracked_before = (repo / ".factory" / "run.json").read_bytes()
+    pointers = []
+    for worktree, branch, key, title in worktrees:
+        git(repo, "worktree", "add", "-q", "-b", branch, str(worktree))
+        (worktree / ".factory" / "stories" / key).mkdir(parents=True)
+        code, out = intake(worktree, key, title)
+        assert code == 0, out
+
+        pointer = (
+            Path(git(worktree, "rev-parse", "--absolute-git-dir"))
+            / "forge" / "run.json"
+        )
+        pointers.append(pointer)
+        assert json.loads(pointer.read_text())["issue_key"] == key
+        assert (worktree / ".factory" / "run.json").read_bytes() == tracked_before
+        assert git(worktree, "diff", "--", ".factory/run.json") == ""
+
+    assert pointers[0] != pointers[1]
+
+
+def test_intake_on_legacy_fixture_starts_new_layout_old_artifacts_readable(repo):
+    sign_off(repo)
+    (repo / ".factory" / "run.json").write_text(json.dumps({
+        "issue_key": "LEG-1", "phase": "shipped",
+    }))
+    legacy_tests = repo / ".factory" / "tests.json"
+    legacy_tests.write_text(json.dumps({"automated": {"passed": True}}))
+    legacy_history = repo / ".factory" / "history" / "LEG-1"
+    legacy_history.mkdir(parents=True)
+    legacy_stages = legacy_history / "stages.json"
+    legacy_stages.write_text(json.dumps({"stages": [{"status": "done"}]}))
+    legacy_marker = repo / ".factory" / "plan-approval.json"
+    legacy_marker.write_text(json.dumps({"legacy": True}))
+    before = {
+        path: path.read_bytes()
+        for path in (legacy_tests, legacy_stages, legacy_marker)
+    }
+
+    code, out = intake(repo, "NEW-1", "New layout")
+
+    assert code == 0, out
+    lib = load_factory_lib(repo)
+    assert lib.story_dir(repo, "NEW-1").is_dir()
+    assert lib.run_state_path(repo).parent.name == "forge"
+    assert lib.evidence_path(repo, "LEG-1", "stages.json") == legacy_stages
+    assert all(path.read_bytes() == content for path, content in before.items())
+
+
+def test_merge_simulation_two_stories_zero_factory_conflicts(repo, tmp_path):
+    sign_off(repo)
+    for key, title in (("MERGE-1", "First"), ("MERGE-2", "Second")):
+        ensure_story(repo, key, title)
+    roadmap = json.loads((repo / "plans" / "roadmap.json").read_text())
+    for item in roadmap["items"]:
+        if item.get("key") in {"MERGE-1", "MERGE-2"}:
+            item["status"] = "active"
+    (repo / "plans" / "roadmap.json").write_text(json.dumps(roadmap, indent=2) + "\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "prepare concurrent stories")
+
+    branches = []
+    factory_paths = []
+    for key, title in (("MERGE-1", "First"), ("MERGE-2", "Second")):
+        branch = key.lower()
+        worktree = tmp_path / branch
+        git(repo, "worktree", "add", "-q", "-b", branch, str(worktree))
+        code, out = intake(worktree, key, title)
+        assert code == 0, out
+        scoped = worktree / ".factory" / "stories" / key
+        (scoped / "tests.json").write_text(json.dumps({"story": key}) + "\n")
+        git(worktree, "add", ".factory")
+        git(worktree, "commit", "-q", "-m", f"record {key}")
+        branches.append(branch)
+        factory_paths.append({
+            path for path in git(worktree, "show", "--format=", "--name-only").splitlines()
+            if path.startswith(".factory/")
+        })
+
+    assert factory_paths[0].isdisjoint(factory_paths[1])
+
+    for branch in branches:
+        git(repo, "merge", "--no-edit", branch)
+        assert not git(repo, "diff", "--name-only", "--diff-filter=U")
+    changed = git(repo, "diff", "HEAD~2", "HEAD", "--name-only").splitlines()
+    story_paths = [path for path in changed if path.startswith(".factory/stories/")]
+    assert story_paths
+    assert all(path.startswith((".factory/stories/MERGE-1/",
+                                ".factory/stories/MERGE-2/")) for path in story_paths)
+
+
+def test_shipped_new_layout_story_visible_to_board_and_consumers(repo):
+    key = "SCOPED-1"
+    board_story(repo, key)
+    add_pr_link(repo, key)
+    scoped = repo / ".factory" / "stories" / key
+    reviews = scoped / "reviews"
+    reviews.mkdir(parents=True)
+    (scoped / "shipped.json").write_text("{}\n")
+    (scoped / "stages.json").write_text(json.dumps({
+        "stages": [{"status": "done"}],
+    }))
+    finding = {"category": "scoped-proof", "area": "history", "summary": "visible"}
+    for aspect in ("quality", "performance", "security"):
+        (reviews / f"{aspect}.json").write_text(json.dumps({
+            "blocking_findings": [], "non_blocking_findings": [finding],
+        }))
+    completed = repo / "plans" / "completed" / f"{key}-scoped.md"
+    completed.parent.mkdir(parents=True, exist_ok=True)
+    completed.write_text(
+        f"---\nissue: {key}\nstory: {key}\nstatus: shipped\n---\n\n# Scoped\n"
+    )
+
+    code, out = run(repo, "check_board_complete.py")
+    assert code == 0, out
+    code, out = run(repo, "forge.py", "plan", "list")
+    assert code == 0 and "1/1" in out and completed.name in out, out
+    code, out = run(repo, "forge.py", "findings", "patterns")
+    assert code == 0 and "RECURRING x3" in out and key in out, out
+
+    later = "SCOPED-2"
+    board_story(repo, later)
+    (repo / ".factory" / "stories" / later).mkdir(parents=True)
+    code, out = run(repo, "forge.py", "audit")
+    assert code == 0 and "IGNORED ESCALATION" in out and key in out, out
+
+
+def test_phase_derivation_matches_legacy_run_json_semantics(repo):
+    lib = load_factory_lib(repo)
+    legacy = repo / ".factory" / "run.json"
+    legacy_phases = (
+        "discovery", "planning", "decomposing", "awaiting-approval",
+        "implementing", "testing", "reviewing", "functional-check",
+        "pr-ready", "shipped", "done", "degraded",
+    )
+    for phase in legacy_phases:
+        legacy.write_text(json.dumps({"issue_key": "LEG-1", "phase": phase}))
+        assert lib.load_json(lib.run_state_path(repo))["phase"] == phase
+    assert lib.run_state_path(repo, "LEG-2", for_write=True) == legacy
+
+    key = "SCOPED-1"
+    scoped = lib.story_dir(repo, key)
+    scoped.mkdir(parents=True)
+    state = {"issue_key": key, "phase": "awaiting-approval"}
+    pointer = lib.run_state_path(repo, key, for_write=True)
+    lib.dump_json(pointer, state)
+    assert lib.load_json(lib.run_state_path(repo))["phase"] == "awaiting-approval"
+    assert lib.run_state_path(repo, "LEG-2", for_write=True) == legacy
+
+    (scoped / "decomposition.json").write_text("{}\n")
+    assert lib.load_json(lib.run_state_path(repo))["phase"] == "implementing"
+    (scoped / "tests.json").write_text("{}\n")
+    assert lib.load_json(lib.run_state_path(repo))["phase"] == "testing"
+    (scoped / "verify.json").write_text("{}\n")
+    assert lib.load_json(lib.run_state_path(repo))["phase"] == "reviewing"
+    reviews = scoped / "reviews"
+    reviews.mkdir()
+    for aspect in ("quality", "performance", "security"):
+        (reviews / f"{aspect}.json").write_text("{}\n")
+    assert lib.load_json(lib.run_state_path(repo))["phase"] == "functional-check"
+    (scoped / "outcome.json").write_text("{}\n")
+    assert lib.load_json(lib.run_state_path(repo))["phase"] == "functional-check"
+
+    lib.dump_json(pointer, {"phase": "shipped"})
+    assert lib.load_json(lib.run_state_path(repo))["phase"] == "shipped"
+
+
+def test_legacy_layout_stays_readable_by_every_consumer(repo):
+    lib = load_factory_lib(repo)
+    with pytest.raises(ValueError, match="one path component"):
+        lib.story_dir(repo, "LEG\\1")
+    factory = repo / ".factory"
+    factory.mkdir(exist_ok=True)
+    (factory / "run.json").write_text(json.dumps({"issue_key": "LEG-1"}))
+    legacy_names = (
+        "decomposition.json",
+        "grills/plan.json",
+        "grills/tasks/T1.json",
+        "tests.json",
+        "reviews/quality.json",
+        "verify.json",
+    )
+    for name in legacy_names:
+        path = factory / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n")
+
+    assert lib.decomposition_state_path(repo) == factory / "decomposition.json"
+    assert lib.tests_state_path(repo) == factory / "tests.json"
+    assert lib.review_dir(repo) == factory / "reviews"
+    assert lib.verify_state_path(repo) == factory / "verify.json"
+    for name in legacy_names:
+        assert lib.evidence_path(repo, "LEG-1", name) == factory / name
+
+    history = factory / "history" / "LEG-1"
+    for name in legacy_names:
+        source = factory / name
+        target = history / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source.replace(target)
+    (factory / "run.json").write_text(json.dumps({"issue_key": "OTHER-1"}))
+
+    assert lib.decomposition_state_path(repo, "LEG-1") == history / "decomposition.json"
+    assert lib.tests_state_path(repo, "LEG-1") == history / "tests.json"
+    assert lib.review_dir(repo, "LEG-1") == history / "reviews"
+    assert lib.verify_state_path(repo, "LEG-1") == history / "verify.json"
+    for name in legacy_names:
+        assert lib.evidence_path(repo, "LEG-1", name) == history / name
 
 
 def refresh_manifest(repo: Path) -> None:
@@ -519,11 +837,105 @@ def refresh_manifest(repo: Path) -> None:
 
 # ---------------------------------------------------------------- happy path
 
-def test_full_lifecycle_and_archive(repo, tmp_path):
+def prepare_pr_ready_story(
+    repo: Path, tmp_path: Path, *, scoped_layout: bool = False,
+) -> Path:
+    sign_off(repo)
+    if scoped_layout:
+        (repo / ".factory" / "stories" / "ENG-1").mkdir(parents=True)
+    code, out = intake(repo)
+    assert code == 0, out
+    if scoped_layout:
+        plan = repo / "plans" / "active" / "ENG-1-invoices.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text(
+            "---\nstatus: approved\nissue: ENG-1\nstory: ENG-1\n---\n\n" + PLAN_BODY
+        )
+        state = run_state(repo)
+        state.update({
+            "plan_file": plan.relative_to(repo).as_posix(),
+            "plan_status": "approved",
+            "story": "ENG-1",
+        })
+        lib = load_factory_lib(repo)
+        lib.dump_json(lib.run_state_path(repo), state)
+        code, out = record_grill(repo, "plan", digest_of=plan)
+        assert code == 0, out
+    else:
+        code, out = save_plan(repo, tmp_path)
+        assert code == 0, out
+    record_skeleton_then_frontier(repo, DECOMP["tasks"])
+    write_passing_artifacts(repo)
+    code, out = run(repo, "update_run.py", "--decomposition-status", "recorded")
+    assert code == 0, out
+    return repo / ".factory" / "stories" / "ENG-1"
+
+
+def test_pr_ready_ships_in_place_no_file_moves(repo, tmp_path):
+    scoped = prepare_pr_ready_story(repo, tmp_path, scoped_layout=True)
+    outcome = scoped / "outcome.json"
+    outcome.unlink()
+    code, out = run(
+        repo, "forge.py", "outcome", "set",
+        "The invoice list now loads for every account and supports date filters "
+        "without requiring a support request.",
+    )
+    assert code == 0, out
+    assert outcome.is_file() and not (repo / ".factory" / "outcome.json").exists()
+
+    plan = next((repo / "plans" / "active").glob("ENG-1-*.md"))
+    before = {
+        path.relative_to(repo): path.read_bytes()
+        for path in [plan, *scoped.rglob("*")]
+        if path.is_file()
+    }
+    code, out = run(repo, "pr_ready.py")
+    assert code == 0, out
+    assert "shipped in place" in out
+    assert not (repo / ".factory" / "history" / "ENG-1").exists()
+    assert not list((repo / "plans" / "completed").glob("ENG-1-*.md"))
+    for relative, body in before.items():
+        assert (repo / relative).read_bytes() == body, relative
+    shipped = json.loads((scoped / "shipped.json").read_text())
+    assert shipped["story"] == "ENG-1" and shipped["phase"] == "shipped"
+    assert run_state(repo)["phase"] == "shipped"
+    assert roadmap_items(repo)["ENG-1"]["status"] == "done"
+    assert roadmap_items(repo)["ENG-1"]["history"] == ".factory/stories/ENG-1/"
+
+    code, out = run(repo, "pr_ready.py")
+    assert code == 0 and "already shipped in place: ENG-1" in out
+
+
+def test_board_and_history_read_shipped_story_dir(repo, tmp_path):
+    scoped = prepare_pr_ready_story(repo, tmp_path, scoped_layout=True)
+    code, out = run(repo, "pr_ready.py")
+    assert code == 0, out
+
+    from forge_cli.board import aggregate_state, story_detail
+
+    detail = story_detail(repo, "ENG-1")
+    assert detail is not None
+    assert detail["evidence"]["outcome"]["outcome"].startswith("The invoice list")
+    assert detail["evidence"]["verify"]["ok"] is True
+    story = next(item for item in aggregate_state(repo)["stories"]
+                 if item["key"] == "ENG-1")
+    assert story["state"] == "shipped"
+    assert story["lifecycle"]["verify"] is True
+    assert story["lifecycle"]["tests"] is True
+    assert all(story["lifecycle"]["reviews"].values())
+    assert scoped.is_dir() and not (repo / ".factory" / "history" / "ENG-1").exists()
+
+    code, out = run(repo, "forge.py", "history", "--story", "ENG-1")
+    assert code == 0, out
+    assert "shipped" in out and "Story: ENG-1" in out
+
+
+def test_pr_ready_legacy_story_still_archives_to_history(repo, tmp_path):
     sign_off(repo)
     assert signed_off(repo)
     code, _ = intake(repo)
     assert code == 0
+    make_legacy_story(repo)
     code, out = save_plan(repo, tmp_path)
     assert code == 0, out
     record_skeleton_then_frontier(repo, DECOMP["tasks"])
@@ -745,7 +1157,7 @@ def test_recorder_stdin_reads_non_ascii_utf8(repo, tmp_path):
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     recorded = json.loads(
-        (repo / ".factory" / "decomposition.json").read_text(encoding="utf-8")
+        (story_state(repo) / "decomposition.json").read_text(encoding="utf-8")
     )
     assert recorded["tasks"][0]["title"] == payload["tasks"][0]["title"]
 
@@ -1718,13 +2130,13 @@ def test_intake_preserves_signoff_and_refuses_to_clobber_evidence(repo, tmp_path
     # Mid-task second intake must refuse (autoreview r3)
     code, out = intake(repo, "ENG-2", "Refunds")
     assert code != 0 and "unarchived" in out
-    assert (repo / ".factory" / "decomposition.json").exists()
+    assert (story_state(repo) / "decomposition.json").exists()
     # Deliberate abandonment works and preserves sign-off (intake fix, r1 of first review)
     code, out = intake(repo, "ENG-2", "Refunds", "--discard-active")
     assert code == 0, out
     state = run_state(repo)
     assert signed_off(repo) and state["phase"] == "planning"
-    assert not (repo / ".factory" / "decomposition.json").exists()
+    assert not (story_state(repo) / "decomposition.json").exists()
 
 
 def test_stale_task_state_reports_not_clears(repo):
@@ -1756,9 +2168,12 @@ def test_intake_after_ship_needs_no_discard(repo, tmp_path):
     record_skeleton_then_frontier(repo, DECOMP["tasks"])
     state = run_state(repo)
     state["phase"] = "shipped"
-    (repo / ".factory" / "run.json").write_text(json.dumps(state))
+    lib = load_factory_lib(repo)
+    lib.dump_json(lib.run_state_path(repo), state)
     code, out = intake(repo, "ENG-2", "Refunds")
     assert code == 0, out
+    assert (repo / "plans" / "active" / "ENG-1-invoices.md").is_file()
+    assert not (repo / "plans" / "debt" / "ENG-1-invoices.md").exists()
 
 
 def test_intake_guards_orphaned_approved_plan(repo, tmp_path):
@@ -1853,7 +2268,7 @@ def ready_task(repo: Path, tmp_path: Path) -> None:
 
 def test_pr_ready_rejects_unstamped_evidence(repo, tmp_path):
     ready_task(repo, tmp_path)
-    verify = repo / ".factory" / "verify.json"
+    verify = story_state(repo) / "verify.json"
     verify.write_text(json.dumps({"ok": True}))  # no commit stamp
     code, out = run(repo, "pr_ready.py")
     assert code != 0 and "provenance" in out
@@ -4366,17 +4781,16 @@ def test_roadmap_fill_sets_blank_field_on_pending(repo):
     assert item["epic"] == "billing"
     assert item["spec"] == "docs/specs/base.md"
     assert item["depends_on"] == ["SIGNOFF-0"]
-    events = [json.loads(line) for line in
-              (repo / ".factory" / "events.jsonl").read_text().splitlines()]
+    events = load_events(repo)
     filled = [event for event in events if event["event"] == "roadmap-filled"]
     assert len(filled) == 1 and filled[0]["story"] == "ENG-9"
 
     roadmap_before = path.read_bytes()
-    events_before = (repo / ".factory" / "events.jsonl").read_bytes()
+    events_before = load_events(repo)
     code, out = run(repo, "forge.py", *args)
     assert code == 0 and "already has the requested values" in out, out
     assert path.read_bytes() == roadmap_before
-    assert (repo / ".factory" / "events.jsonl").read_bytes() == events_before
+    assert load_events(repo) == events_before
 
 
 def test_roadmap_fill_refuses_nonblank_field(repo):
@@ -4702,7 +5116,7 @@ def test_roadmap_lifecycle(repo, tmp_path):
     assert code == 0, out
     items = roadmap_items(repo)
     assert items["ENG-1"]["status"] == "done"
-    assert items["ENG-1"]["history"] == ".factory/history/ENG-1/"
+    assert items["ENG-1"]["history"] == ".factory/stories/ENG-1/"
     assert items["ENG-2"]["status"] == "pending"
     # next now suggests ENG-2 after the archived task
     code, out = run(repo, "intake.py", "--issue", "ENG-2", "--title", "Payments")
@@ -4813,7 +5227,9 @@ def test_recorders_refuse_nonconforming_payloads(repo, tmp_path):
                                       "summary": "ok", "blocking_findings": [],
                                       "skills_used": ["review-animations"]}))
     assert code == 0, out
-    recorded = json.loads((repo / ".factory" / "reviews" / "quality.json").read_text())
+    recorded = json.loads((
+        repo / ".factory" / "stories" / "ENG-1" / "reviews" / "quality.json"
+    ).read_text())
     assert recorded["generated_by"] == "autoreview" and "blocking" not in recorded
     # testing artifact via the recorder
     code, out = run(repo, "record_test_from_json.py", "--kind", "automated",
@@ -4840,7 +5256,7 @@ def test_functional_check_conditional_on_user_facing(repo, tmp_path):
     run(repo, "update_run.py", "--decomposition-status", "recorded")
     # user_facing: false — gate passes without a functional artifact
     write_passing_artifacts(repo)
-    f = repo / ".factory"
+    f = story_state(repo)
     decomp = json.loads((f / "decomposition.json").read_text())
     decomp["user_facing"] = False
     (f / "decomposition.json").write_text(json.dumps(decomp))
@@ -4859,7 +5275,7 @@ def test_functional_check_required_when_user_facing(repo, tmp_path):
     save_plan(repo, tmp_path)
     run(repo, "update_run.py", "--decomposition-status", "recorded")
     write_passing_artifacts(repo)  # user_facing: true via DECOMP
-    f = repo / ".factory"
+    f = story_state(repo)
     tests = json.loads((f / "tests.json").read_text())
     del tests["functional"]
     (f / "tests.json").write_text(json.dumps(tests))
@@ -5165,10 +5581,11 @@ def test_next_routes_design_skills_by_feature_type(repo, tmp_path):
     code, out = run(repo, "forge.py", "next")
     assert code == 0 and "emil-design-eng" in out
     # backend task: no design skills suggested
-    decomp_path = repo / ".factory" / "decomposition.json"
+    decomp_path = story_state(repo) / "decomposition.json"
     data = json.loads(decomp_path.read_text())
     data["user_facing"] = False
     decomp_path.write_text(json.dumps(data))
+    (delegation_ledger(repo).parent / "decomposition.json").write_text(json.dumps(data))
     code, out = run(repo, "forge.py", "next")
     assert code == 0 and "emil-design-eng" not in out
 
@@ -5968,6 +6385,79 @@ def test_assumptions_archive_compacts_resolved_rows(repo, tmp_path):
 
 def hook(repo: Path, payload: dict) -> tuple[int, str]:
     return run(repo, "pre_tool_use.py", stdin=json.dumps(payload))
+
+
+def make_unmerged(repo: Path, rel: str = "src/conflict.ts") -> None:
+    path = repo / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("base\n")
+    git(repo, "add", rel)
+    git(repo, "commit", "-m", "conflict base")
+    oid = git(repo, "rev-parse", f"HEAD:{rel}")
+    records = "".join(f"100644 {oid} {stage}\t{rel}\n" for stage in (1, 2, 3))
+    proc = subprocess.run(
+        ["git", "update-index", "--index-info"], cwd=repo, input=records,
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_hook_denylist_fallback_on_unparseable_state_or_import(repo):
+    state = repo / ".factory" / "run.json"
+    valid_state = state.read_text()
+    state.write_text("<<<<<<< ours\n{}\n=======\n{}\n>>>>>>> theirs\n")
+    payload = {"tool_name": "Edit", "tool_input": {
+        "file_path": str(repo / "src" / "app.ts")}}
+
+    code, out = hook(repo, payload)
+    assert code == 0 and "deny" in out and "emergency deny-list" in out
+    code, out = run(repo, "stop_continue.py", stdin="{}")
+    assert code == 0 and json.loads(out) == {"continue": True}
+
+    state.write_text(valid_state)
+    library = repo / "factory" / "scripts" / "factory_lib.py"
+    library.write_text("this is not valid Python !!!\n")
+    code, out = hook(repo, payload)
+    assert code == 0 and "deny" in out and "SyntaxError" in out
+    code, out = hook(repo, {"tool_name": "Bash", "tool_input": {"command": "sed -i x src/app.ts"}})
+    assert code == 0 and "deny" in out and "emergency deny-list" in out
+    code, out = hook(repo, {"tool_name": "Bash", "tool_input": {"command": "git status"}})
+    assert code == 0 and out == "{}\n"
+    code, out = run(repo, "stop_continue.py", stdin="{}")
+    assert code == 0 and json.loads(out) == {"continue": True}
+
+
+def test_hook_permits_git_native_resolution_on_unmerged_paths(repo):
+    make_unmerged(repo)
+    for command in (
+        "git checkout --ours -- src/conflict.ts",
+        "git checkout --theirs -- src/conflict.ts",
+        "git add -- src/conflict.ts",
+        "git rm -- src/conflict.ts",
+        "git reset -- src/conflict.ts",
+        "git merge --abort",
+        "git rebase --abort",
+        "git cherry-pick --abort",
+    ):
+        code, out = hook(repo, {"tool_name": "Bash", "tool_input": {"command": command}})
+        assert code == 0 and out == "{}\n", command
+
+
+def test_hook_refuses_handwrite_and_merged_paths_during_merge(repo):
+    make_unmerged(repo)
+    for payload in (
+        {"tool_name": "Edit", "tool_input": {
+            "file_path": str(repo / "src" / "conflict.ts")}},
+        {"tool_name": "Write", "tool_input": {
+            "file_path": str(repo / "src" / "conflict.ts")}},
+        {"tool_name": "Bash", "tool_input": {"command": "git add -- src/app.ts"}},
+        {"tool_name": "Bash", "tool_input": {
+            "command": "git checkout --ours -- src/app.ts"}},
+        {"tool_name": "Bash", "tool_input": {
+            "command": "git add -- src/conflict.ts src/app.ts"}},
+    ):
+        code, out = hook(repo, payload)
+        assert code == 0 and "deny" in out, payload
 
 
 def test_commit_belt_stages_refreshed_ledger(repo):
@@ -7475,7 +7965,7 @@ def test_plan_grill_recorder_stamps_the_active_issue(repo, tmp_path):
     assert code != 0 and "input-digest" in out
     code, out = record_grill(repo, "plan", digest_of=draft)
     assert code == 0, out
-    data = json.loads((repo / ".factory" / "grills" / "plan.json").read_text())
+    data = json.loads((story_state(repo) / "grills" / "plan.json").read_text())
     assert data["issue"] == "ENG-1"
 
 
@@ -8097,10 +8587,7 @@ def _merged_pr(number: int, title: str, branch: str) -> dict:
 
 
 def _backfill_events(repo: Path) -> list[dict]:
-    path = repo / ".factory" / "events.jsonl"
-    if not path.exists():
-        return []
-    return [json.loads(line) for line in path.read_text().splitlines()]
+    return load_events(repo)
 
 
 def test_project_backfill_unique_match_still_links(repo):
@@ -8307,7 +8794,7 @@ def test_project_backfill_is_idempotent(repo):
     first = backfill_project(repo, gh=gh_fixture)
     before = {
         "roadmap": (repo / "plans" / "roadmap.json").read_bytes(),
-        "events": (repo / ".factory" / "events.jsonl").read_bytes(),
+        "events": load_events(repo),
     }
     second = backfill_project(repo, gh=gh_fixture)
 
@@ -8316,7 +8803,7 @@ def test_project_backfill_is_idempotent(repo):
                       "reconstructed": 0}
     assert calls == 1
     assert (repo / "plans" / "roadmap.json").read_bytes() == before["roadmap"]
-    assert (repo / ".factory" / "events.jsonl").read_bytes() == before["events"]
+    assert load_events(repo) == before["events"]
 
 
 def test_harness_health_runs_project_audit_without_backfill():
@@ -8401,6 +8888,48 @@ def test_roadmap_heal_unions_duplicates_done_wins(repo, tmp_path):
     assert code != 0 and "restore" in out
 
 
+def test_forge_next_auto_heals_roadmap_after_merge(repo, tmp_path):
+    import_roadmap(repo, tmp_path)
+    path = repo / "plans" / "roadmap.json"
+    git(repo, "add", "plans/roadmap.json")
+    git(repo, "commit", "-m", "roadmap base")
+    branch = git(repo, "branch", "--show-current")
+    git(repo, "checkout", "-b", "roadmap-side")
+    side = json.loads(path.read_text())
+    side["items"][0]["status"] = "active"
+    path.write_text(json.dumps(side, indent=2) + "\n")
+    git(repo, "add", "plans/roadmap.json")
+    git(repo, "commit", "-m", "roadmap active")
+    git(repo, "checkout", branch)
+    main = json.loads(path.read_text())
+    main["items"][0]["status"] = "done"
+    main["items"][0]["history"] = ".factory/history/ENG-1/"
+    path.write_text(json.dumps(main, indent=2) + "\n")
+    git(repo, "add", "plans/roadmap.json")
+    git(repo, "commit", "-m", "roadmap done")
+    merge = subprocess.run(
+        ["git", *GIT_ID, "merge", "roadmap-side"], cwd=repo,
+        capture_output=True, text=True,
+    )
+    assert merge.returncode != 0 and "CONFLICT" in merge.stdout + merge.stderr
+
+    code, first = run(repo, "forge.py", "next")
+    assert code == 0 and "Healed plans/roadmap.json" in first, first
+    assert roadmap_items(repo)["ENG-1"]["status"] == "done"
+    code, second = run(repo, "forge.py", "next")
+    assert code == 0 and "Healed plans/roadmap.json" not in second, second
+
+    git(repo, "add", "plans/roadmap.json")
+    git(repo, "commit", "-m", "resolve roadmap merge")
+    marker = Path(git(repo, "rev-parse", "--git-path", "forge-roadmap-healed"))
+    (marker if marker.is_absolute() else repo / marker).unlink()
+    merged = json.loads(path.read_text())
+    merged["items"].append({**merged["items"][0], "status": "active"})
+    path.write_text(json.dumps(merged, indent=2) + "\n")
+    code, after_commit = run(repo, "forge.py", "next")
+    assert code == 0 and "1 duplicate(s) unioned" in after_commit, after_commit
+
+
 # ------------------------------------------------- the record of what shipped
 
 def test_outcome_is_required_to_ship_and_survives_in_the_record(repo, tmp_path):
@@ -8409,7 +8938,7 @@ def test_outcome_is_required_to_ship_and_survives_in_the_record(repo, tmp_path):
     save_plan(repo, tmp_path)
     run(repo, "record_decomposition_from_json.py", stdin=json.dumps(DECOMP))
     write_passing_artifacts(repo)
-    (repo / ".factory" / "outcome.json").unlink()
+    (story_state(repo) / "outcome.json").unlink()
     run(repo, "update_run.py", "--decomposition-status", "recorded")
     # a bare pr_ready stays a readiness CHECK: it names the gap, it does not
     # demand an argument before it will answer
@@ -8428,12 +8957,8 @@ def test_outcome_is_required_to_ship_and_survives_in_the_record(repo, tmp_path):
     assert code == 0 and "PR_READY" in out, out
     # what shipped is answerable from the durable record, not from a session
     assert roadmap_items(repo)["ENG-1"]["outcome"] == text
-    history = repo / ".factory" / "history" / "ENG-1"
-    assert json.loads((history / "outcome.json").read_text())["outcome"] == text
-    assert not (repo / ".factory" / "outcome.json").exists()
-    # the shipped stub stays byte-stable for parallel merges
-    assert "outcome" not in json.loads(
-        (repo / ".factory" / "run.json").read_text())
+    assert json.loads((story_state(repo) / "outcome.json").read_text())["outcome"] == text
+    assert "outcome" not in run_state(repo)
 
 
 def test_story_timeline_is_recorded_and_archived_with_its_story(repo, tmp_path):
@@ -8441,8 +8966,7 @@ def test_story_timeline_is_recorded_and_archived_with_its_story(repo, tmp_path):
     intake(repo)
     save_plan(repo, tmp_path)
     record_skeleton_then_frontier(repo, DECOMP["tasks"])
-    events = [json.loads(line) for line in
-              (repo / ".factory" / "events.jsonl").read_text().splitlines()]
+    events = load_events(repo)
     kinds = [e["event"] for e in events]
     assert "intake" in kinds and "plan-approved" in kinds and "decomposed" in kinds
     # every line says WHO: a timeline in an agent-built repo that cannot
@@ -8453,16 +8977,8 @@ def test_story_timeline_is_recorded_and_archived_with_its_story(repo, tmp_path):
     run(repo, "update_run.py", "--decomposition-status", "recorded")
     code, out = run(repo, "pr_ready.py")
     assert code == 0, out
-    archived = [json.loads(line) for line in
-                (repo / ".factory" / "history" / "ENG-1" / "events.jsonl")
-                .read_text().splitlines()]
-    assert "shipped" in [e["event"] for e in archived]
-    # The archive is a COPY: the live ledger is append-only and keeps every
-    # line. Removing lines from a union-merged file does not survive a parallel
-    # branch that still holds them — the removal grows back on merge, so it was
-    # never a removal at all.
-    live = [json.loads(line) for line in
-            (repo / ".factory" / "events.jsonl").read_text().splitlines()]
+    live = load_events(repo)
+    assert "shipped" in [e["event"] for e in live]
     assert [e for e in live if e.get("story") == "ENG-1"], live
     assert "client-signoff" in [e["event"] for e in live]
 
@@ -8474,10 +8990,10 @@ def test_ship_archives_the_plan_grill_not_the_project_grills(repo, tmp_path):
     run(repo, "record_decomposition_from_json.py", stdin=json.dumps(DECOMP))
     write_passing_artifacts(repo)
     run(repo, "update_run.py", "--decomposition-status", "recorded")
-    assert (repo / ".factory" / "grills" / "plan.json").exists()
+    assert (story_state(repo) / "grills" / "plan.json").exists()
     code, out = run(repo, "pr_ready.py")
     assert code == 0, out
-    history = repo / ".factory" / "history" / "ENG-1"
+    history = story_state(repo)
     # the interrogation record of THIS story survives the ship
     assert json.loads((history / "grills" / "plan.json").read_text())["issue"] == "ENG-1"
     # project-level grills are not this story's evidence
@@ -9315,54 +9831,46 @@ def test_adhoc_capture_is_visible_debt_not_a_build_bypass(repo, tmp_path):
     assert code == 0, out
 
 
-def test_event_ledger_merges_instead_of_conflicting(repo):
-    """Two stories shipping from parallel worktrees both append here. Without
-    the union driver the timeline is exactly the file that conflicts."""
+def test_append_event_writes_new_file_no_shared_ledger(repo):
     attrs = (repo / ".gitattributes").read_text()
-    # built-in union: a custom driver is registered per clone by a hook that
-    # may not have run, and this file must never conflict
-    assert ".factory/*.jsonl merge=union" in attrs
     ledger = repo / ".factory" / "events.jsonl"
     ledger.parent.mkdir(exist_ok=True)
-    ledger.write_text('{"event": "intake", "generated_by": "orchestrator"}\n')
-    git(repo, "add", "-f", ".factory/events.jsonl", ".gitattributes")
-    git(repo, "commit", "-q", "-m", "base ledger")
-    base = head(repo)
-    git(repo, "checkout", "-q", "-b", "story-a")
-    ledger.write_text(ledger.read_text() + '{"event": "stage-done", "story": "A"}\n')
-    git(repo, "add", "-f", ".factory/events.jsonl")
-    git(repo, "commit", "-q", "-m", "story A")
-    git(repo, "checkout", "-q", base)
-    git(repo, "checkout", "-q", "-b", "story-b")
-    ledger.write_text('{"event": "intake", "generated_by": "orchestrator"}\n'
-                      '{"event": "stage-done", "story": "B"}\n')
-    git(repo, "add", "-f", ".factory/events.jsonl")
-    git(repo, "commit", "-q", "-m", "story B")
-    git(repo, "merge", "--no-edit", "story-a")  # asserts a clean merge
-    merged = ledger.read_text()
-    assert '"story": "A"' in merged and '"story": "B"' in merged, merged
-    assert "<<<<<<<" not in merged
+    ledger.write_text('{"event": "legacy"}\n')
+    before = ledger.read_bytes()
 
-    # …and a union-merged file cannot also be PRUNED: whatever one branch
-    # removes, a parallel branch that still holds those lines restores on
-    # merge. That is why ship copies a story's timeline into its archive
-    # rather than moving it out of the live ledger.
-    shared = head(repo)                      # both branches below have A and B
-    git(repo, "checkout", "-q", "-b", "pruner")
-    ledger.write_text('{"event": "intake", "generated_by": "orchestrator"}\n')
-    git(repo, "add", "-f", ".factory/events.jsonl")
-    git(repo, "commit", "-q", "-m", "prune the shipped story's lines")
-    assert '"story": "A"' not in ledger.read_text()
-    git(repo, "checkout", "-q", shared)
-    git(repo, "checkout", "-q", "-b", "keeper")
-    ledger.write_text(ledger.read_text() + '{"event": "stage-done", "story": "C"}\n')
-    git(repo, "add", "-f", ".factory/events.jsonl")
-    git(repo, "commit", "-q", "-m", "story C appends")
-    git(repo, "checkout", "-q", "pruner")
-    git(repo, "merge", "--no-edit", "keeper")
-    assert '"story": "A"' in ledger.read_text(), (
-        "the pruned lines did NOT come back — if this ever fails, pruning has "
-        "become safe and pr_ready could move rather than copy the timeline")
+    code, out = run(repo, "forge.py", "pr-link", "ENG-1", "acme/widgets#42")
+    assert code == 0, out
+
+    event_files = list((repo / ".factory" / "events").glob("*.json"))
+    assert len(event_files) == 1
+    written = json.loads(event_files[0].read_text())
+    assert written["event"] == "pr-linked"
+    assert written["story"] == "ENG-1"
+    assert ledger.read_bytes() == before
+    assert ".factory/*.jsonl merge=union" not in attrs
+    assert ".factory/signals.jsonl merge=union" in attrs
+
+
+def test_history_merges_legacy_and_per_file_events(repo):
+    ledger = repo / ".factory" / "events.jsonl"
+    ledger.parent.mkdir(exist_ok=True)
+    ledger.write_text(
+        '{"event": "intake", "at": "2026-07-01T09:00:00+00:00", '
+        '"story": "ENG-1", "detail": "legacy event"}\n'
+        "torn legacy line\n"
+    )
+    event_dir = repo / ".factory" / "events"
+    event_dir.mkdir()
+    (event_dir / "one.json").write_text(json.dumps({
+        "event": "stage-done", "at": "2026-07-02T10:00:00+00:00",
+        "story": "ENG-1", "detail": "per-file event",
+    }))
+
+    code, out = run(repo, "forge.py", "history", "--story", "ENG-1")
+    assert code == 0, out
+    assert "legacy event" in out
+    assert "per-file event" in out
+    assert out.index("legacy event") < out.index("per-file event")
 
 
 def test_forge_history_filters_by_story_type_and_date(repo):
@@ -9454,13 +9962,12 @@ def test_pr_link_event_survives_a_clone_with_no_remote(repo, tmp_path):
     code, out = run(repo, "forge.py", "pr-link", "ENG-1", reference)
     assert code == 0, out
     assert (repo / ".factory" / "run.json").read_bytes() == before
-    linked = json.loads(
-        (repo / ".factory" / "events.jsonl").read_text().splitlines()[-1])
+    linked = load_events(repo)[-1]
     assert linked["event"] == "pr-linked"
     assert linked["story"] == "ENG-1"
     assert linked["detail"] == reference
 
-    git(repo, "add", "-f", ".factory/events.jsonl")
+    git(repo, "add", "-f", ".factory/events")
     git(repo, "commit", "-q", "-m", "link shipped PR")
     clone = tmp_path / "clone"
     git(repo.parent, "clone", "-q", str(repo), str(clone))
@@ -9549,8 +10056,7 @@ def test_signal_events_block_ship_until_resolved(repo, tmp_path):
     code, out = run(repo, "pr_ready.py")
     assert code == 0, out
     # channel archived with the task, working copy cleaned
-    assert (repo / ".factory" / "history" / "ENG-1" / "signals.jsonl").exists()
-    assert not (repo / ".factory" / "signals.jsonl").exists()
+    assert (repo / ".factory" / "signals.jsonl").exists()
 
 
 def test_open_quickfix_blocks_ship_until_closed(repo, tmp_path):
@@ -9712,7 +10218,9 @@ def test_structured_findings_recorded_and_malformed_refused(repo, tmp_path):
                         {"category": "validation-gap", "area": "api",
                          "summary": "missing bounds check"}])))
     assert code == 0, out
-    recorded = json.loads((repo / ".factory" / "reviews" / "quality.json").read_text())
+    recorded = json.loads((
+        repo / ".factory" / "stories" / "ENG-1" / "reviews" / "quality.json"
+    ).read_text())
     assert recorded["non_blocking_findings"][0]["category"] == "validation-gap"
 
 
@@ -9819,7 +10327,7 @@ def test_stage_loop_orders_execution_and_gates_pr_ready(repo, tmp_path):
     stages_before_artifacts = json.loads(
         (repo / ".factory" / "stages.json").read_text())
     write_passing_artifacts(repo)
-    quality_path = repo / ".factory" / "reviews" / "quality.json"
+    quality_path = story_state(repo) / "reviews" / "quality.json"
     quality = json.loads(quality_path.read_text())
     quality["contract_verdicts"] = [
         {
@@ -9832,7 +10340,7 @@ def test_stage_loop_orders_execution_and_gates_pr_ready(repo, tmp_path):
     quality_path.write_text(json.dumps(quality))
     # write_passing_artifacts stamps the single-task DECOMP; T2's contract has
     # to survive, or stage done has nothing to measure it against
-    (repo / ".factory" / "decomposition.json").write_text(
+    (story_state(repo) / "decomposition.json").write_text(
         json.dumps({**decomp, "commit": head(repo)}))
     (repo / ".factory" / "stages.json").write_text(json.dumps(stages_before_artifacts))
     (delegation_ledger(repo).parent / "stages.json").write_text(
@@ -9851,8 +10359,7 @@ def test_stage_loop_orders_execution_and_gates_pr_ready(repo, tmp_path):
     assert code == 0, out
     code, out = run(repo, "pr_ready.py")
     assert code == 0, out
-    assert not (repo / ".factory" / "stages.json").exists()
-    assert (repo / ".factory" / "history" / "ENG-1" / "stages.json").exists()
+    assert (repo / ".factory" / "stages.json").exists()
 
 
 def fake_companion_home(tmp_path: Path) -> Path:
@@ -10249,7 +10756,7 @@ def test_decomposition_accepts_frontier_detail_and_exempts_done_tasks(repo, tmp_
     )
 
     assert code == 0, out
-    recorded = json.loads((repo / ".factory" / "decomposition.json").read_text())
+    recorded = json.loads((story_state(repo) / "decomposition.json").read_text())
     assert recorded["tasks"][0]["write_scope"] == completed["write_scope"]
     assert recorded["tasks"][0]["required_tests"] == completed["required_tests"]
     assert recorded["tasks"][0]["verify_commands"] == completed["verify_commands"]
@@ -11095,8 +11602,7 @@ def test_stage_done_ledgers_a_contract_rewritten_mid_stage(repo, tmp_path):
         (repo / ".factory" / "stages.json").read_text())["stages"]
         if s["id"] == "T1")
     assert stage["contract_changed"]["from"] != stage["contract_changed"]["to"]
-    events = (repo / ".factory" / "events.jsonl").read_text()
-    assert "stage-contract-changed" in events
+    assert "stage-contract-changed" in [event["event"] for event in load_events(repo)]
 
 
 def test_decomposition_refuses_to_remove_an_active_task(repo, tmp_path):
@@ -11168,7 +11674,7 @@ def test_completed_contract_check_uses_protected_stage_digest(repo, tmp_path):
         **STAGE_TASK,
         "acceptance_criteria": ["worker rewrote the prior contract"],
     }
-    decomposition = repo / ".factory" / "decomposition.json"
+    decomposition = story_state(repo) / "decomposition.json"
     forged_prior = json.loads(decomposition.read_text())
     forged_prior["tasks"] = [changed_task]
     decomposition.write_text(json.dumps(forged_prior))
@@ -11275,7 +11781,7 @@ def test_jsonl_ledgers_merge_with_a_builtin_driver(repo):
     attributes = (HARNESS / ".gitattributes").read_text()
     assert not jsonl_append_rules(attributes)
     for pattern in ("plans/lessons.jsonl", "plans/quickfixes.jsonl",
-                    ".factory/*.jsonl"):
+                    ".factory/signals.jsonl"):
         line = next(l for l in attributes.splitlines() if l.startswith(pattern))
         assert line.endswith("merge=union"), line
 
@@ -11330,8 +11836,9 @@ def test_stage_done_incomplete_leaves_stage_open(repo, tmp_path):
     stages = json.loads((repo / ".factory" / "stages.json").read_text())["stages"]
     assert stages[0]["status"] == "active"
     assert stages[0]["incomplete"] == "the retry path is unwritten"
-    events = (repo / ".factory" / "events.jsonl").read_text()
-    assert "stage-incomplete" in events and "retry path" in events
+    events = load_events(repo)
+    assert any(event["event"] == "stage-incomplete"
+               and "retry path" in event.get("detail", "") for event in events)
     # and it clears once the stage really closes
     code, out = run(repo, "forge.py", "stage", "done", "T1")
     assert code == 0, out
@@ -11471,7 +11978,7 @@ def test_decomposition_provenance_overrides_agent_supplied_fields(repo, tmp_path
                     stdin=json.dumps(payload))
 
     assert code == 0, out
-    recorded = json.loads((repo / ".factory" / "decomposition.json").read_text())
+    recorded = json.loads((story_state(repo) / "decomposition.json").read_text())
     assert {key: recorded[key] for key in (
         "project", "story", "epic", "plan_file", "plan_sha256",
     )} == {
@@ -11511,7 +12018,7 @@ def test_decomposition_accepts_empty_required_tests(repo, tmp_path):
                     stdin=json.dumps({**DECOMP, "tasks": [task]}))
 
     assert code == 0, out
-    recorded = json.loads((repo / ".factory" / "decomposition.json").read_text())
+    recorded = json.loads((story_state(repo) / "decomposition.json").read_text())
     assert recorded["tasks"][0]["required_tests"] == []
 
 
@@ -12001,7 +12508,7 @@ def test_delegate_derives_write_from_stage_state(repo, tmp_path):
 @delegate_task_grill_test
 def test_delegate_refuses_without_task_grill(repo, tmp_path):
     start_stage(repo, tmp_path, STAGE_TASK, launch=False)
-    grill = repo / ".factory" / "grills" / "tasks" / "T1.json"
+    grill = story_state(repo) / "grills" / "tasks" / "T1.json"
     grill.unlink()
     command = (
         "python3 factory/scripts/record_grill_from_json.py --gate task "
@@ -12024,7 +12531,7 @@ def test_delegate_refuses_without_task_grill(repo, tmp_path):
 @delegate_task_grill_test
 def test_delegate_refuses_stale_task_grill(repo, tmp_path):
     start_stage(repo, tmp_path, STAGE_TASK, launch=False)
-    grill = repo / ".factory" / "grills" / "tasks" / "T1.json"
+    grill = story_state(repo) / "grills" / "tasks" / "T1.json"
     payload = json.loads(grill.read_text())
     payload["input_sha256"] = "0" * 64
     grill.write_text(json.dumps(payload))
@@ -12056,7 +12563,7 @@ def test_delegate_passes_with_fresh_task_grill(repo, tmp_path):
 @delegate_task_grill_test
 def test_delegate_readonly_unaffected_by_task_grill(repo, tmp_path):
     start_stage(repo, tmp_path, STAGE_TASK, launch=False)
-    (repo / ".factory" / "grills" / "tasks" / "T1.json").unlink()
+    (story_state(repo) / "grills" / "tasks" / "T1.json").unlink()
 
     code, out = run(repo, "forge.py", "delegate", "T1", "--read-only",
                     env=fake_companion_env(tmp_path))
@@ -12216,7 +12723,7 @@ def test_workspace_decomposition_mirror_cannot_forge_task_contract(
     intake(repo)
     save_plan(repo, tmp_path)
     record_skeleton_then_frontier(repo, [STAGE_TASK])
-    mirror = repo / ".factory" / "decomposition.json"
+    mirror = story_state(repo) / "decomposition.json"
     forged = json.loads(mirror.read_text())
     forged["tasks"][0]["write_scope"] = ["billing/"]
     mirror.write_text(json.dumps(forged))
@@ -12267,6 +12774,7 @@ def test_stage_migrate_requires_confirmation_and_adopts_legacy_state(
         repo, tmp_path):
     sign_off(repo)
     intake(repo)
+    make_legacy_story(repo)
     save_plan(repo, tmp_path)
     record_skeleton_then_frontier(repo, [STAGE_TASK])
     protected = delegation_ledger(repo).parent
@@ -12291,6 +12799,7 @@ def test_stage_migrate_refuses_partial_protected_authority(
         repo, tmp_path, protected_name):
     sign_off(repo)
     intake(repo)
+    make_legacy_story(repo)
     save_plan(repo, tmp_path)
     record_skeleton_then_frontier(repo, [STAGE_TASK])
     protected = delegation_ledger(repo).parent
@@ -12308,6 +12817,7 @@ def test_stage_migrate_refuses_partial_protected_authority(
 def prepare_legacy_stage_migration(repo, tmp_path, tasks=None):
     sign_off(repo)
     intake(repo)
+    make_legacy_story(repo)
     save_plan(repo, tmp_path)
     tasks = tasks or [STAGE_TASK]
     record_skeleton_then_frontier(repo, tasks)
@@ -13931,7 +14441,7 @@ def test_precompact_scratchpad_snapshots_facts_and_findings(repo, tmp_path):
     # a shipped task wipes the pad — session noise never crosses tasks
     run(repo, "forge.py", "stage", "done", "T1")
     write_passing_artifacts(repo)
-    quality_path = repo / ".factory" / "reviews" / "quality.json"
+    quality_path = story_state(repo) / "reviews" / "quality.json"
     quality = json.loads(quality_path.read_text())
     quality["contract_verdicts"] = [{
         "contract_id": "C1",
@@ -14318,7 +14828,7 @@ def test_decomposition_recorder_validates_plan_contracts(repo, tmp_path):
     }
     code, out = run(repo, "record_decomposition_from_json.py", stdin=json.dumps(valid))
     assert code == 0, out
-    recorded = json.loads((repo / ".factory" / "decomposition.json").read_text())
+    recorded = json.loads((story_state(repo) / "decomposition.json").read_text())
     assert [item["id"] for item in recorded["tasks"][1]["plan_contracts"]] == ["C2"]
 
 
@@ -14434,7 +14944,7 @@ def test_quality_review_requires_contract_verdicts(repo, tmp_path):
     code, out = run(repo, "record_review_from_json.py", "--aspect", "quality",
                     stdin=json.dumps(review_payload(contract_verdicts=partial)))
     assert code == 0, out
-    quality = json.loads((repo / ".factory" / "reviews" / "quality.json").read_text())
+    quality = json.loads((story_state(repo) / "reviews" / "quality.json").read_text())
     assert quality["blocking_findings"] == [{
         "category": "plan-contract-partial",
         "area": "plan.md#first",
@@ -14456,9 +14966,10 @@ def test_lite_quality_review_ignores_shipped_plan_contracts(repo, tmp_path):
     record_skeleton_then_frontier(repo, [task])
 
     state = run_state(repo)
-    (repo / ".factory" / "run.json").write_text(json.dumps({
+    lib = load_factory_lib(repo)
+    lib.dump_json(lib.run_state_path(repo), {
         "project": state["project"], "phase": "shipped",
-    }))
+    })
     code, out = run(repo, "forge.py", "mode", "lite", "--by", "test",
                     "--reason", "x")
     assert code == 0, out
@@ -14483,7 +14994,7 @@ def test_pr_ready_blocks_on_unverified_plan_contracts(repo, tmp_path):
     code, out = run(repo, "pr_ready.py")
     assert code != 0 and "C1, C2" in out and "./forge review-brief" in out
 
-    quality_path = repo / ".factory" / "reviews" / "quality.json"
+    quality_path = story_state(repo) / "reviews" / "quality.json"
     quality = json.loads(quality_path.read_text())
     quality["contract_verdicts"] = [
         {"contract_id": "C1", "verdict": "implemented", "evidence": "src/a.py:1"},
@@ -15100,7 +15611,9 @@ def test_project_name_survives_the_run_state_lifecycle(tmp_path):
     assert project_identity(target)["name"] == "Acme Billing", \
         "intake rewrote run.json and dropped the authored project name"
 
-    run_state = json.loads((target / ".factory" / "run.json").read_text())
+    lib = load_factory_lib(target)
+    run_path = lib.run_state_path(target)
+    run_state = json.loads(run_path.read_text())
     assert run_state.get("issue_key"), "intake did not actually write run state"
 
     # And through SHIP: pr_ready reduces run.json to a stable object
@@ -15108,7 +15621,7 @@ def test_project_name_survives_the_run_state_lifecycle(tmp_path):
     # shipped repo's board would fall back to its directory slug.
     shipped = {k: run_state[k] for k in ("project",) if k in run_state}
     shipped["phase"] = "shipped"
-    (target / ".factory" / "run.json").write_text(json.dumps(shipped))
+    run_path.write_text(json.dumps(shipped))
     assert project_identity(target)["name"] == "Acme Billing", \
         "the shipped run-state shape dropped the authored project name"
 

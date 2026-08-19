@@ -43,12 +43,136 @@ def factory_dir(root: Path | None = None) -> Path:
     return (root or repo_root()) / ".factory"
 
 
-def run_state_path(root: Path | None = None) -> Path:
-    return factory_dir(root) / "run.json"
+def story_dir(root: Path, key: str) -> Path:
+    """Return the canonical evidence directory for one story."""
+    if not isinstance(key, str) or not key or key in (".", "..") \
+            or "/" in key or "\\" in key:
+        raise ValueError("story key must be one path component")
+    return factory_dir(root) / "stories" / key
 
 
-def decomposition_state_path(root: Path | None = None) -> Path:
-    return factory_dir(root) / "decomposition.json"
+def story_uses_scoped_layout(root: Path, key: str) -> bool:
+    """Return whether a story is marked for scoped state."""
+    return story_dir(root, key).is_dir()
+
+
+def evidence_path(
+    root: Path,
+    key: str | None,
+    name: str,
+    *,
+    for_write: bool = False,
+) -> Path:
+    """Resolve story evidence, retaining legacy live and history reads.
+
+    Intake creates the story directory for the new layout. Its presence is
+    therefore also the write-layout marker; an active story without it is a
+    legacy story whose live singleton must remain writable.
+    """
+    relative = Path(name)
+    if relative.is_absolute() or not relative.parts or any(
+            part in ("", ".", "..") for part in relative.parts):
+        raise ValueError("evidence name must be a contained relative path")
+    live = factory_dir(root) / relative
+    if not key:
+        return live
+
+    scoped_dir = story_dir(root, key)
+    scoped = scoped_dir / relative
+    state = load_json(run_state_path(root), default={})
+    active = (state.get("issue_key") or state.get("story")) == key
+    if for_write:
+        return scoped if story_uses_scoped_layout(root, key) or not active else live
+    if scoped.exists():
+        return scoped
+    if active and live.exists():
+        return live
+
+    archived = factory_dir(root) / "history" / key / relative
+    if archived.exists():
+        return archived
+    return scoped
+
+
+def _active_story_key(root: Path) -> str:
+    state = load_json(run_state_path(root), default={})
+    key = state.get("issue_key") or state.get("story")
+    return key if isinstance(key, str) else ""
+
+
+_RUN_STATE_ROOTS: dict[Path, Path] = {}
+
+
+def run_state_path(
+    root: Path | None = None,
+    key: str | None = None,
+    *,
+    for_write: bool = False,
+) -> Path:
+    """Resolve the worktree-local run pointer, with legacy fallback.
+
+    The protected pointer is authoritative for reads. Intake supplies the
+    story key for writes, so only a story with the scoped-layout marker writes
+    there; a legacy story continues using tracked run.json.
+    """
+    base = root or repo_root()
+    legacy = factory_dir(base) / "run.json"
+    try:
+        protected = git_control_dir(base) / "run.json"
+    except SystemExit:
+        if legacy.is_file() and not for_write:
+            return legacy
+        raise
+    if for_write and key:
+        path = protected if story_uses_scoped_layout(base, key) else legacy
+        if path == protected:
+            _RUN_STATE_ROOTS[protected] = base
+        return path
+    if protected.is_file():
+        _RUN_STATE_ROOTS[protected] = base
+        return protected
+    return legacy
+
+
+def derive_phase(root: Path, state: dict[str, Any]) -> str:
+    """Derive durable lifecycle progress while retaining transient phases."""
+    stored = state.get("phase", "")
+    key = state.get("issue_key") or state.get("story")
+    if not isinstance(key, str) or not key or not story_uses_scoped_layout(root, key):
+        return stored if isinstance(stored, str) else ""
+
+    scoped = story_dir(root, key)
+    implied = ""
+    if (scoped / "decomposition.json").is_file():
+        implied = "implementing"
+    if (scoped / "tests.json").is_file() or (scoped / "verify.json").is_file():
+        implied = "testing"
+    if (scoped / "tests.json").is_file() and (scoped / "verify.json").is_file():
+        implied = "reviewing"
+    reviews = scoped / "reviews"
+    if all((reviews / f"{aspect}.json").is_file()
+           for aspect in ("quality", "performance", "security")):
+        implied = "functional-check"
+
+    order = (
+        "discovery", "planning", "decomposing", "awaiting-approval",
+        "implementing", "testing", "reviewing", "functional-check",
+        "pr-ready", "shipped", "done",
+    )
+    if stored not in order or implied not in order:
+        return stored if isinstance(stored, str) else implied
+    return order[max(order.index(stored), order.index(implied))]
+
+
+def decomposition_state_path(
+    root: Path | None = None,
+    key: str | None = None,
+    *,
+    for_write: bool = False,
+) -> Path:
+    base = root or repo_root()
+    story = key or _active_story_key(base)
+    return evidence_path(base, story, "decomposition.json", for_write=for_write)
 
 
 def clean_git_env() -> dict[str, str]:
@@ -58,16 +182,32 @@ def clean_git_env() -> dict[str, str]:
     }
 
 
-def verify_state_path(root: Path | None = None) -> Path:
-    return factory_dir(root) / "verify.json"
+def verify_state_path(
+    root: Path | None = None,
+    key: str | None = None,
+    *,
+    for_write: bool = False,
+) -> Path:
+    base = root or repo_root()
+    story = key or _active_story_key(base)
+    return evidence_path(base, story, "verify.json", for_write=for_write)
 
 
-def tests_state_path(root: Path | None = None) -> Path:
-    return factory_dir(root) / "tests.json"
+def tests_state_path(
+    root: Path | None = None,
+    key: str | None = None,
+    *,
+    for_write: bool = False,
+) -> Path:
+    base = root or repo_root()
+    story = key or _active_story_key(base)
+    return evidence_path(base, story, "tests.json", for_write=for_write)
 
 
-def review_dir(root: Path | None = None) -> Path:
-    return factory_dir(root) / "reviews"
+def review_dir(root: Path | None = None, key: str | None = None) -> Path:
+    base = root or repo_root()
+    story = key or _active_story_key(base)
+    return evidence_path(base, story, "reviews")
 
 
 FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
@@ -492,7 +632,11 @@ def now_iso() -> str:
 def load_json(path: Path, default: Any = None) -> Any:
     if not path.exists():
         return default
-    return json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    run_root = _RUN_STATE_ROOTS.get(path)
+    if run_root is not None and isinstance(data, dict):
+        data = {**data, "phase": derive_phase(run_root, data)}
+    return data
 
 
 def dump_json(path: Path, data: Any) -> None:
@@ -761,7 +905,7 @@ def load_review_artifacts(
     problems: list[str] = []
     head = head_sha(root) if require_head else None
     for aspect in ("quality", "performance", "security"):
-        path = review_dir(root) / f"{aspect}.json"
+        path = evidence_path(root, _active_story_key(root), f"reviews/{aspect}.json")
         data = load_json(path, default={})
         if not data:
             problems.append(str(path.relative_to(root)))
@@ -894,7 +1038,8 @@ def require_grill(
     the grill) from staleness. `expect_digest_of` binds the grill to the
     exact artifact being gated: the recorded input_sha256 must match that
     file, so grilling proposal A never approves proposal B."""
-    path = factory_dir(root) / "grills" / f"{gate}.json"
+    key = _active_story_key(root) if gate == "plan" else ""
+    path = evidence_path(root, key, f"grills/{gate}.json")
     data = load_json(path, default={})
     if not data:
         raise SystemExit(
@@ -946,7 +1091,8 @@ def require_task_grill(
     task: dict,
 ) -> None:
     """Require a passing grill bound to the current grounding inputs."""
-    path = factory_dir(root) / "grills" / "tasks" / f"{task_id}.json"
+    key = _active_story_key(root)
+    path = evidence_path(root, key, f"grills/tasks/{task_id}.json")
     data = load_json(path, default={})
     record_command = (
         "python3 factory/scripts/record_grill_from_json.py --gate task "
@@ -1105,10 +1251,9 @@ def task_rows(root: Path) -> list[dict]:
     for task in tasks:
         task_id = task.get("id")
         stage = stage_by_id.get(task_id, {})
-        grill = load_json(
-            factory_dir(root) / "grills" / "tasks" / f"{task_id}.json",
-            default={},
-        )
+        key = _active_story_key(root)
+        grill_path = evidence_path(root, key, f"grills/tasks/{task_id}.json")
+        grill = load_json(grill_path, default={})
         fresh = _task_grill_fresh(root, task, grill) if grill else False
         status = stage.get("status")
         if status == "done":
@@ -1180,10 +1325,9 @@ def task_frontier_state(root: Path) -> tuple[str, dict] | None:
     if not _task_contract_complete(frontier):
         return "author-contract", frontier
 
-    grill = load_json(
-        factory_dir(root) / "grills" / "tasks" / f"{task_id}.json",
-        default={},
-    )
+    key = _active_story_key(root)
+    grill_path = evidence_path(root, key, f"grills/tasks/{task_id}.json")
+    grill = load_json(grill_path, default={})
     if _task_grill_fresh(root, frontier, grill):
         stage = stage_by_id.get(task_id, {})
         state = "delegate" if stage.get("status") == "active" else "stage-start"
