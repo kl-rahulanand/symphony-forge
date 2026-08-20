@@ -763,13 +763,16 @@
         "opening a lite, quickfix, or degraded write window while a stage is active refuses"
       ],
       "order": 35,
-      "status": "pending",
+      "status": "done",
       "epic": "accountable-engineering",
       "skill": "backend",
       "depends_on": [
         "FORGE-ACC-2"
       ],
-      "spec": "docs/specs/accountable-engineering-loop.md"
+      "spec": "docs/specs/accountable-engineering-loop.md",
+      "completed_at": "2026-08-19T15:47:58+00:00",
+      "history": ".factory/stories/FORGE-ACC-3/",
+      "outcome": "Approval and closeout integrity is enforced end to end: an edited plan, an unreviewed commit, an out-of-order or unstamped artifact, or a mid-stage write window can no longer reach pr_ready. Plans bind by digest and need a fresh human-attributed grill+approval; every task is grilled, planned, and approved before implementation; the confirmed spec is re-grilled against repo reality before drafting; each stage closes only with a clean local-review stamp over its committed delta; the three lenses are one coherent run; closeout is ordered on a clean tree with the outcome on the evidence commit; no window opens mid-stage. Also builds decision 0047 task-level shipping (task start/pr-ready, marker-on-main, marker-aware frontier, CI task markers), bootstrapped story-level."
     },
     {
       "key": "FORGE-CFS-1",
@@ -792,10 +795,27 @@
       "completed_at": "2026-08-18T17:53:22+00:00",
       "history": ".factory/history/FORGE-CFS-1/",
       "outcome": "Overlapping story PRs no longer conflict on .factory state. Story evidence is story-scoped (.factory/stories/<KEY>/), the active-story run pointer is worktree-local and untracked with phase derived from artifacts, events are one conflict-free file each (union merge driver retired), pr_ready ships in place with no archive move, and the PreToolUse/Stop hooks survive a merge \u2014 engaging a self-contained deny-list that keeps writes locked but permits git-native recovery instead of crashing, so a conflict-markered run.json or factory_lib can never trap a session again. Intake activates the new layout; legacy repos stay readable and pick it up via forge upgrade. Proven by a two-worktree merge simulation with zero .factory conflicts."
+    },
+    {
+      "key": "ship-clears-forge-authority",
+      "title": "Ship-cleanup clears .git/forge authority",
+      "story": "As a harness maintainer, I want story ship-cleanup to clear the git-local .git/forge stage authority \u2014 and load_stages to ignore it when no story is active \u2014 so that a shipped story's stale authority can never phantom-deadlock the next window.",
+      "acceptance_criteria": [
+        "On ship, pr_ready clears .git/forge/{stages,decomposition}.json (and delegations.jsonl, locks/), not only archiving to .factory/history/<KEY>/",
+        "load_stages returns {} when the run has no issue_key (no active story), so leftover authority never reports a phantom active stage",
+        "Regression test: an orphaned .git/forge/stages.json (no current issue, or issue != current) does not block forge quickfix/mode/stage start"
+      ],
+      "order": 42,
+      "status": "pending",
+      "epic": "accountable-engineering",
+      "skill": "backend",
+      "depends_on": [],
+      "origin": "adhoc",
+      "spec_debt_reason": "hardening follow-up from the 2026-08-19 WIN-2 stale-authority deadlock (see plans/lessons); no confirmed spec yet"
     }
   ],
   "generated_by": "human",
-  "updated_at": "2026-08-18T17:53:22+00:00",
+  "updated_at": "2026-08-20T06:53:36+00:00",
   "epics": [
     {
       "id": "symphony-forge",
@@ -859,6 +879,14 @@
       "objective": "Enforce decision 0032 end to end: JIT frontier contracts gated at stage start, evidence-backed independent task grills, internally derived grounding digests, bounded reviewable diffs, and task-level board visibility \u2014 agents do the heavy lifting, humans decide only authority questions.",
       "source_refs": [
         "docs/specs/accountable-engineering-loop.md"
+      ]
+    },
+    {
+      "id": "measurable-ledger",
+      "title": "The ledger is measurable: facts leave, prose stays",
+      "objective": "Every transition is a structured event; a per-machine export feed lets an optional consumer (cadence) measure delivery health and developer judgement without any prose, path, or name leaving the machine.",
+      "source_refs": [
+        "docs/specs/factory-event-export.md"
       ]
     }
   ]

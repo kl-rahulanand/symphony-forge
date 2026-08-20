@@ -7,14 +7,18 @@ import subprocess
 from pathlib import Path
 
 from factory_lib import (
-    client_signoff, evidence_path, load_json, repo_root, run_state_path,
-    task_frontier_state,
+    client_signoff, evidence_path, head_sha, load_json, load_review_artifacts,
+    repo_root, require_all_stages_done, require_coherent_review_run,
+    requirements_digest, run_state_path, task_frontier_state,
 )
 
 from .context import pending_context
 from .quickfix import load_active, profile_of
+from .outcome import load_outcome
+from .readiness import tests_passed
 from .roadmap import cmd_heal, leverage, load_items, ready_pending
 from .signal import open_signals
+from .specs import resolve_spec_reference
 
 
 def _auto_heal_roadmap_after_merge(base: Path) -> None:
@@ -225,22 +229,44 @@ def cmd_next(args: argparse.Namespace) -> None:
                          "--issue <KEY> --title \"<title>\"")
     elif state.get("plan_status") != "approved":
         phase("planning")
-        steps.append("[dev] MANDATORY: enter plan mode (shift+tab) and plan per "
-                     "factory/prompts/planner.md, or deliberately open a bounded "
-                     "`./forge quickfix start \"<reason>\"` window. Product writes are "
-                     "hook-blocked otherwise (Codex planning alternative: planner-high; "
-                     "exploration via /codex:rescue read-only).")
-        steps.append("[dev] Record new decisions as you go: forge.py decision new <slug>")
-        plan_grill = load_json(
-            evidence_path(base, state.get("issue_key"), "grills/plan.json"),
-            default={},
+        issue = state.get("issue_key")
+        item = next((entry for entry in load_items(base) if entry.get("key") == issue), None)
+        spec_ref = item.get("spec") if isinstance(item, dict) else None
+        spec = resolve_spec_reference(base, spec_ref, confirmed=True) \
+            if isinstance(spec_ref, str) and spec_ref.strip() else None
+        requirements_grill = load_json(
+            evidence_path(base, issue, "grills/requirements.json"), default={},
         )
-        if plan_grill.get("verdict") != "pass" or plan_grill.get("issue") != state.get("issue_key"):
-            steps.append("[dev] MANDATORY before approval: grill the plan (/grill-me, or "
-                         "factory/prompts/griller.md --gate plan) and record: "
-                         "record_grill_from_json.py --gate plan — plan save refuses without it")
-        steps.append("[dev] On approval: forge.py plan save --from <plan-file> "
-                     f"--story {state.get('issue_key')}")
+        requirements_fresh = bool(
+            spec
+            and requirements_grill.get("verdict") == "pass"
+            and requirements_grill.get("commit")
+            and requirements_grill.get("issue") == issue
+            and requirements_grill.get("input_sha256") == requirements_digest(base, spec)
+        )
+        if not requirements_fresh:
+            steps.append(
+                "[dev] FIRST: re-grill the confirmed spec against current repo reality "
+                "with AskUserQuestion rounds (factory/prompts/griller.md --gate "
+                "requirements), resolve findings, then record: "
+                "record_grill_from_json.py --gate requirements"
+            )
+        else:
+            steps.append("[dev] MANDATORY: enter plan mode (shift+tab) and plan per "
+                         "factory/prompts/planner.md, or deliberately open a bounded "
+                         "`./forge quickfix start \"<reason>\"` window. Product writes are "
+                         "hook-blocked otherwise (Codex planning alternative: planner-high; "
+                         "exploration via /codex:rescue read-only).")
+            steps.append("[dev] Record new decisions as you go: forge.py decision new <slug>")
+            plan_grill = load_json(
+                evidence_path(base, issue, "grills/plan.json"), default={},
+            )
+            if plan_grill.get("verdict") != "pass" or plan_grill.get("issue") != issue:
+                steps.append("[dev] MANDATORY before approval: grill the plan (/grill-me, or "
+                             "factory/prompts/griller.md --gate plan) and record: "
+                             "record_grill_from_json.py --gate plan — plan save refuses without it")
+            steps.append("[dev] On approval: forge.py plan save --from <plan-file> "
+                         f"--story {issue}")
     elif state.get("decomposition_status") != "recorded":
         phase("decomposing")
         steps.append("[dev] Run docs-decomposer (factory/prompts/decomposer.md), then "
@@ -256,9 +282,20 @@ def cmd_next(args: argparse.Namespace) -> None:
             a for a in ("quality", "performance", "security")
             if not load_json(evidence_path(base, issue, f"reviews/{a}.json"), default={})
         ]
-        if not tests.get("automated"):
+        open_stages = require_all_stages_done(base)
+        head = head_sha(base)
+        reviews, review_problems = load_review_artifacts(base, require_head=True)
+        review_problems.extend(require_coherent_review_run(base, reviews))
+        functional = tests.get("functional", {})
+        functional_ready = bool(
+            functional
+            and tests_passed(functional, functional=True)
+            and tests.get("commit") == head
+        )
+        outcome = load_outcome(base) or {}
+        frontier_state = task_frontier_state(base)
+        if open_stages or frontier_state:
             phase("implementing")
-            frontier_state = task_frontier_state(base)
             if frontier_state:
                 frontier, task = frontier_state
                 task_id = task["id"]
@@ -274,10 +311,25 @@ def cmd_next(args: argparse.Namespace) -> None:
                         f"[dev] Grill {task_id} with factory/prompts/griller.md --gate "
                         "task; resolve findings and record the digest-bound pass"
                     )
+                elif frontier == "author-task-plan":
+                    steps.append(
+                        f"[dev] Enter plan mode and author {task_id}, then save it: "
+                        f"./forge task plan save {task_id} --from <path>"
+                    )
+                elif frontier == "await-approval":
+                    steps.append(
+                        f"[dev] Await human approval, then record it: "
+                        f"./forge task approve {task_id} --by \"<name>\""
+                    )
                 elif frontier == "stage-start":
                     steps.append(f"[dev] Start {task_id}: ./forge stage start {task_id}")
                 elif frontier == "delegate":
                     steps.append(f"[dev] Delegate {task_id}: ./forge delegate {task_id}")
+                elif frontier == "await-merge":
+                    steps.append(
+                        f"[dev] Await {task_id} merge into main; its task marker is "
+                        "not on origin/main yet, then rerun ./forge next"
+                    )
                 if user_facing:
                     steps[-1] += (
                         " — User-facing task: emil-design-eng + frontend-design are "
@@ -285,18 +337,27 @@ def cmd_next(args: argparse.Namespace) -> None:
                         "skills_used); apple-design advisory for gesture/motion — "
                         "harness.yaml required_skills"
                     )
-        elif not verify.get("ok"):
+        elif not tests.get("automated"):
+            phase("testing")
+            steps.append("[dev] Record the completed stages' automated proof: "
+                         "record_test_from_json.py --kind automated --input <json>")
+        elif not verify.get("ok") or verify.get("commit") != head:
             phase("verifying")
             steps.append("[dev] Run: python3 factory/scripts/verify.py")
-        elif reviews_missing:
+        elif review_problems:
             phase("reviewing")
+            review_detail = ", ".join(reviews_missing) or "stale or incoherent lenses"
             steps.append("[dev] Run ONE autoreview pass in Codex, three lenses "
-                         f"(factory/prompts/reviewer.md); still to record: {', '.join(reviews_missing)} "
+                         f"(factory/prompts/reviewer.md); repair: {review_detail} "
                          "via record_review_from_json.py")
-        elif not tests.get("functional") and user_facing:
+        elif user_facing and not functional_ready:
             phase("functional-check")
             steps.append("[dev] Task is user-facing: run functional-checker and record: "
                          "record_test_from_json.py --kind functional --input <json>")
+        elif outcome.get("commit") != head or not outcome.get("outcome"):
+            phase("outcome")
+            steps.append("[dev] Record what shipped at the evidence commit: "
+                         "forge.py outcome set \"<what changed and what someone can now do>\"")
         else:
             phase("ready for PR gate")
             from .assumptions import blocking_for_issue
