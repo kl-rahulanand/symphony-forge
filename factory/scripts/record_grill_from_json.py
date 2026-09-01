@@ -18,18 +18,104 @@ from pathlib import Path
 
 from factory_lib import (
     plan_digest_without_assumptions,
-    dump_json, evidence_path, grounding_digest, head_sha, load_json, now_iso,
-    read_stdin_utf8, repo_root, requirements_digest, run_state_path, sha256_of,
+    dump_json, evidence_path, git_control_dir, grounding_digest, head_sha,
+    load_json, now_iso, protected_decomposition_state_path, read_stdin_utf8,
+    repo_root, requirements_digest, run_state_path, sha256_of,
     task_frontier_state, validate_payload,
 )
 from forge_cli.specs import resolve_spec_reference
 
 VERDICTS = {"pass", "blocked"}
 TASK_DECISIONS = {"keep", "split", "block"}
+GATE_ROUND_FLOORS = {"spec": 2, "requirements": 1, "plan": 2, "task": 1}
 
 
 def _non_empty_string(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _validate_round_provenance(
+    root: Path, payload: dict, gate: str, story: str, task_id: str = "",
+) -> None:
+    floor = GATE_ROUND_FLOORS[gate]
+    rounds = payload.get("rounds")
+    if not isinstance(rounds, list) or len(rounds) < floor:
+        raise SystemExit(f"{gate} grill requires at least {floor} logged round(s)")
+
+    ledger_rounds: list[dict] = []
+    directories = (
+        evidence_path(root, story, "grill-rounds"),
+        evidence_path(root, None, "grill-rounds"),
+    )
+    for directory in dict.fromkeys(directories):
+        if not directory.is_dir():
+            continue
+        for record_path in sorted(directory.glob("*.json")):
+            record = load_json(record_path, default={})
+            ledger_rounds.extend(
+                entry for entry in record.get("questions", [])
+                if isinstance(entry, dict)
+            )
+
+    current_name = f"grills/tasks/{task_id}.json" if gate == "task" \
+        else f"grills/{gate}.json"
+    current_story = story if gate in ("requirements", "plan", "task") else ""
+    current_path = evidence_path(root, current_story, current_name)
+    grill_directories = (
+        evidence_path(root, story, "grills"),
+        evidence_path(root, None, "grills"),
+    )
+    used_rounds: list[dict] = []
+    for directory in dict.fromkeys(grill_directories):
+        if not directory.is_dir():
+            continue
+        paths = [*directory.glob("*.json"), *directory.glob("tasks/*.json")]
+        for grill_path in paths:
+            saved = load_json(grill_path, default={})
+            saved_rounds = saved.get("rounds")
+            if grill_path == current_path and saved_rounds == rounds:
+                continue
+            if isinstance(saved_rounds, list):
+                used_rounds.extend(
+                    entry for entry in saved_rounds if isinstance(entry, dict)
+                )
+
+    available = list(ledger_rounds)
+    for used in used_rounds:
+        claimed = next((
+            logged for logged in available
+            if logged.get("question") == used.get("question")
+            and logged.get("options") == used.get("options")
+            and (
+                logged.get("chosen") is None
+                or logged.get("chosen") == used.get("chosen")
+            )
+        ), None)
+        if claimed is not None:
+            available.remove(claimed)
+    for round_entry in rounds:
+        if not isinstance(round_entry, dict):
+            raise SystemExit(f"{gate} grill rounds entries must be objects")
+        question = round_entry.get("question")
+        options = round_entry.get("options")
+        chosen = round_entry.get("chosen")
+        match = next((
+            logged for logged in available
+            if logged.get("question") == question
+            and logged.get("options") == options
+            and (
+                logged.get("chosen") is None
+                or logged.get("chosen") == chosen
+            )
+        ), None)
+        if match is None:
+            raise SystemExit(
+                f"{gate} grill round does not match an AskUserQuestion ledger record: "
+                f"{question!r}"
+            )
+        available.remove(match)
+    if rounds[-1].get("frontier_empty") is not True:
+        raise SystemExit(f"{gate} grill final round requires frontier_empty true")
 
 
 def _validate_task_grill(root: Path, payload: dict, task_id: str) -> dict:
@@ -79,26 +165,51 @@ def _validate_task_grill(root: Path, payload: dict, task_id: str) -> dict:
         raise SystemExit("task grill gaps entries must be non-empty strings")
 
     frontier = task_frontier_state(root)
-    if frontier is None or frontier[1].get("id") != task_id:
+    stage = next(
+        (s for s in load_json(
+            git_control_dir(root) / "stages.json", default={}
+        ).get("stages", []) if s.get("id") == task_id),
+        {},
+    )
+    # The frontier task grills before it starts; but an ACTIVE or DONE task may
+    # be legitimately RE-grilled — a re-decomposition or a post-approval plan
+    # edit stales its grill, and by then the frontier has moved past it. Accept
+    # the target task itself in that case (validated against ITS OWN contract,
+    # mirroring the seal check), and refuse only a task that is neither the
+    # frontier nor active/done.
+    if frontier is not None and frontier[1].get("id") == task_id:
+        target = frontier[1]
+    elif stage.get("status") in ("active", "done"):
+        target = next(
+            (t for t in load_json(
+                protected_decomposition_state_path(root), default={}
+            ).get("tasks", []) if t.get("id") == task_id),
+            None,
+        )
+        if target is None:
+            raise SystemExit(
+                f"task grill target {task_id} is not in the protected decomposition"
+            )
+    else:
         frontier_id = frontier[1].get("id") if frontier else "none"
         raise SystemExit(
-            f"task grill must cover the protected frontier task ({frontier_id}), "
-            f"not {task_id}"
+            f"task grill must cover the frontier task ({frontier_id}) or an "
+            f"active/done task; {task_id} is neither"
         )
-    criteria = frontier[1].get("acceptance_criteria") or []
+    criteria = target.get("acceptance_criteria") or []
     if set(payload["criteria_map"]) != set(criteria):
         missing = sorted(set(criteria) - set(payload["criteria_map"]))
         extra = sorted(set(payload["criteria_map"]) - set(criteria))
         raise SystemExit(
-            "task grill criteria_map must cover every protected frontier acceptance "
+            "task grill criteria_map must cover every task acceptance "
             f"criterion exactly (missing={missing}, extra={extra})"
         )
     if any(not _non_empty_string(value) for value in payload["criteria_map"].values()):
         raise SystemExit("task grill criteria_map values must be non-empty strings")
-    plan_contracts = frontier[1].get("plan_contracts")
+    plan_contracts = target.get("plan_contracts")
     if not isinstance(plan_contracts, list) or not plan_contracts:
         raise SystemExit(
-            "task grill requires protected frontier plan_contracts whose statements "
+            "task grill requires the task's plan_contracts whose statements "
             "match criteria_map keys"
         )
     contract_statements = {
@@ -165,7 +276,7 @@ def _validate_task_grill(root: Path, payload: dict, task_id: str) -> dict:
                 "these non-empty string fields: issue, evidence, recommendation, "
                 "alternatives, rollback"
             )
-    return frontier[1]
+    return target
 
 
 if any(
@@ -255,11 +366,35 @@ if args.gate == "task":
         raise SystemExit(
             f"payload task_id {payload['task_id']!r} does not match --task {args.task!r}"
         )
+    issue = load_json(run_state_path(root), default={}).get("issue_key", "")
+    task_plan = evidence_path(root, issue, f"task-plans/{args.task}.md")
+    if not task_plan.is_file():
+        raise SystemExit(
+            f"task grill requires a saved task plan first: run `./forge task plan "
+            f"save {args.task} --from <path>`"
+        )
     task = _validate_task_grill(root, payload, args.task)
     for field in ("approved_task_plan_sha256", "approved_by", "approved_at"):
         payload.pop(field, None)
     payload["task_id"] = args.task
-    payload["input_sha256"] = grounding_digest(root, task)
+    # Ground on the SAME treeish the seal (require_ready_task) uses: a DONE
+    # task's grill seals against its stage baseline, so grounding the record on
+    # the moving working tree would read perpetually stale and the re-grill of an
+    # approved/completed task could never be seen fresh. A frontier/active task
+    # still grounds on the working tree ("").
+    _stage = next(
+        (s for s in load_json(
+            git_control_dir(root) / "stages.json", default={}
+        ).get("stages", []) if s.get("id") == args.task),
+        {},
+    )
+    if _stage.get("status") == "done":
+        from forge_cli.stages import stage_baseline
+        _treeish = stage_baseline(root, _stage)
+    else:
+        _treeish = ""
+    payload["input_sha256"] = grounding_digest(root, task, treeish=_treeish)
+    payload["task_plan_sha256"] = plan_digest_without_assumptions(task_plan)
 if args.gate == "plan":
     # Plan grills are per task: stamp the active issue so a stale grill from
     # a previous task can never satisfy this one's plan save.
@@ -273,7 +408,12 @@ if args.gate == "plan":
     payload["issue"] = issue
 payload["recorded_at"] = now_iso()
 payload["commit"] = head_sha(root)
-story = load_json(run_state_path(root), default={}).get("issue_key", "") \
+active_story = load_json(run_state_path(root), default={}).get("issue_key", "")
+if args.gate in GATE_ROUND_FLOORS:
+    _validate_round_provenance(
+        root, payload, args.gate, active_story, args.task or "",
+    )
+story = active_story \
     if args.gate in ("requirements", "plan", "task") else ""
 if args.gate == "task":
     name = f"grills/tasks/{args.task}.json"

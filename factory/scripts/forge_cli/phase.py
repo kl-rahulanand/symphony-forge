@@ -81,10 +81,21 @@ def _auto_heal_roadmap_after_merge(base: Path) -> None:
 def cmd_next(args: argparse.Namespace) -> None:
     base = Path(args.repo).resolve() if args.repo else repo_root()
     _auto_heal_roadmap_after_merge(base)
+    # run.json is a derived pointer (0045); re-derive it when a fresh checkout or
+    # a shipped-task cleanup left it absent but the committed record still names
+    # exactly one in-flight story. Silent no-op when the pointer already stands.
+    from .story import ensure_active_pointer
+    rederived = not load_json(run_state_path(base), default={}).get("issue_key")
+    active_key = ensure_active_pointer(base)
     state = load_json(run_state_path(base), default={})
     factory = base / ".factory"
     pending_ctx = len(pending_context(base))
     steps: list[str] = []
+    if rederived and active_key:
+        steps.append(
+            f"(re-derived the worktree-local run pointer for {active_key} from "
+            "committed state — it was absent on this checkout; nothing was lost)"
+        )
     signed_off = client_signoff(base)[0]
     status = subprocess.run(
         ["git", "status", "--porcelain", "--untracked-files=all"],
@@ -308,18 +319,36 @@ def cmd_next(args: argparse.Namespace) -> None:
                     )
                 elif frontier == "grill":
                     steps.append(
-                        f"[dev] Grill {task_id} with factory/prompts/griller.md --gate "
-                        "task; resolve findings and record the digest-bound pass"
+                        f"[dev] Grill the saved {task_id} plan with `/grill-me` "
+                        "(factory/prompts/griller.md --gate task). Because YOU authored "
+                        "the plan, EVERY round starts with a fresh read-only Codex "
+                        "cold-read (`gpt-5.6-terra` @ xhigh, via `/codex:rescue`) — not "
+                        "a Claude sub-agent, never inline — and you MUST actively WATCH "
+                        "that Codex run (it can pause on a signal awaiting you). Carry "
+                        "its findings into your own AskUserQuestion rounds, fold in the "
+                        "human's answers, re-run the Codex grill, and LOOP until a round "
+                        "is clean AND the plan is stable (no further edits). Record the "
+                        "digest-bound pass. Only a clean grill makes the plan appear on "
+                        "the board. Do NOT ask for approval before the grill converges."
                     )
                 elif frontier == "author-task-plan":
                     steps.append(
-                        f"[dev] Enter plan mode and author {task_id}, then save it: "
-                        f"./forge task plan save {task_id} --from <path>"
+                        f"[dev] Author {task_id} in plan mode — do NOT present the plan "
+                        "in chat. Save it silently: "
+                        f"`./forge task plan save {task_id} --from <path>` (it stays "
+                        "hidden on the board until its grill is clean), then grill it "
+                        "WITHOUT leaving plan mode (the plan-mode marker comes from "
+                        "editing the plan in plan mode, not from an ExitPlanMode prompt)."
                     )
                 elif frontier == "await-approval":
                     steps.append(
-                        f"[dev] Await human approval, then record it: "
-                        f"./forge task approve {task_id} --by \"<name>\""
+                        f"[dev] The grilled {task_id} plan is now visible on the board. "
+                        "Ask for approval EXACTLY ONCE, and only after the grill has "
+                        "converged (a clean round AND the plan is final — no pending "
+                        "edits): the human reviews it THERE (not in chat) and approves; "
+                        f"then record it: `./forge task approve {task_id} --by \"<name>\"`. "
+                        "Do NOT approve after an intermediate grill — a later edit "
+                        "re-stales the approval and forces another round."
                     )
                 elif frontier == "stage-start":
                     steps.append(f"[dev] Start {task_id}: ./forge stage start {task_id}")
@@ -330,7 +359,18 @@ def cmd_next(args: argparse.Namespace) -> None:
                         f"[dev] Await {task_id} merge into main; its task marker is "
                         "not on origin/main yet, then rerun ./forge next"
                     )
-                if user_facing:
+                # Design-skill guidance is PER TASK, not per story. Before the
+                # contract is authored the task flag is not set, so prompt
+                # conditionally at author-contract; afterwards gate on the task's
+                # OWN user_facing, so a backend task in a user_facing story is not
+                # told its (nonexistent) UI skills are mandatory.
+                if frontier == "author-contract":
+                    steps[-1] += (
+                        " — if this task builds UI a person sees, set "
+                        "user_facing: true (emil-design-eng + frontend-design then "
+                        "MANDATORY); a backend task sets user_facing: false"
+                    )
+                elif task.get("user_facing"):
                     steps[-1] += (
                         " — User-facing task: emil-design-eng + frontend-design are "
                         "MANDATORY (recorder refuses the artifact without them in "
@@ -347,9 +387,13 @@ def cmd_next(args: argparse.Namespace) -> None:
         elif review_problems:
             phase("reviewing")
             review_detail = ", ".join(reviews_missing) or "stale or incoherent lenses"
-            steps.append("[dev] Run ONE autoreview pass in Codex, three lenses "
-                         f"(factory/prompts/reviewer.md); repair: {review_detail} "
-                         "via record_review_from_json.py")
+            steps.append("[dev] Run the autoreview DIRECTLY (the orchestrating "
+                         "session — 0011, never a Codex review job), three lenses "
+                         f"(factory/prompts/reviewer.md); repair: {review_detail}. On "
+                         "ANY finding, delegate the fix to Codex (`./forge delegate "
+                         "<id>`), then re-run the autoreview — loop until every lens is "
+                         "clean; record each pass via record_review_from_json.py. Do "
+                         "NOT stop for a human between rounds.")
         elif user_facing and not functional_ready:
             phase("functional-check")
             steps.append("[dev] Task is user-facing: run functional-checker and record: "
@@ -366,7 +410,13 @@ def cmd_next(args: argparse.Namespace) -> None:
                 steps.append(f"[EM] Guide {len(unguided)} open assumption(s) first "
                              "(pr_ready refuses them): forge.py assumptions list --open, "
                              "then assumptions resolve <id> --status ... --notes ...")
-            steps.append("[dev] Run: python3 factory/scripts/pr_ready.py (archives the task; merge stays manual)")
+            steps.append("[dev] Run: python3 factory/scripts/pr_ready.py (archives the story; merge stays manual)")
+            steps.append("[dev] Per-task PR instead: seal each completed task with "
+                         "`./forge task pr-ready <id>` — it writes the task marker, "
+                         "pushes the branch, and opens its PR to the repo default branch "
+                         "(works stage-based; no `forge task start` worktree required), "
+                         "then poll the PR's CI to green and fix any CI failure — no "
+                         "human touch is needed after the plan approval")
             steps.append("[EM] Next task afterwards: pick from ./forge roadmap list --pending, "
                          "then intake.py --issue <KEY> --title \"<title>\"")
     from .decisions import decision_records
