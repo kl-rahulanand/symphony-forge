@@ -28,7 +28,7 @@ It provides:
 
 Claude Code coordinates discovery, planning, decisions, and orchestration through `codex-plugin-cc`. Its hook always denies product and canon writes; planning exploration is delegated to Codex read-only runs.
 
-Codex executes exploration, implementation, and testing; the orchestrating session runs the review (0011, never a Codex review job) and loops it until clean, delegating any fixes back to Codex. `./forge delegate` is the sole normal write path; a five-file `forge mode degraded` window is the ledgered outage exception. The `.factory` artifacts are required in either route.
+Codex executes exploration, implementation, testing, and the review: the orchestrating session releases ONE three-lens pass per task with `./forge review <task-id>` (Codex-run, never a nested companion job; recorded as that task's proof — 0011, 0049), watches it, and loops it until clean, delegating fixes back to Codex. `./forge delegate` is the sole normal write path; a five-file `forge mode degraded` window is the ledgered outage exception. The `.factory` artifacts are required in either route.
 
 ## Phase Contract
 
@@ -40,7 +40,7 @@ Codex executes exploration, implementation, and testing; the orchestrating sessi
 3. wait for approval
 4. per task: plan-mode JIT contract → re-record → grill → stage start → `./forge delegate`; measure under 0018
 5. run deterministic verify
-6. review: run the autoreview (three lenses: quality, performance, security), then LOOP — delegate any fixes to Codex, re-review — until every lens is clean
+6. review, once per task after implementation and verify: `./forge review <task-id>` releases Codex for the three lenses and records them as the task's proof (0049), then LOOP — delegate fixes to Codex, re-review — until every lens is clean (never a menu for the human — `docs/QUALITY.md`)
 7. run the functional check when the decomposition says `user_facing: true`
 8. record the shipped outcome, mark PR ready, open the PR to the default branch, and poll CI green (fixing CI failures)
 
@@ -98,13 +98,13 @@ A task is not PR-ready until all of these exist:
 ## Non-Negotiables
 
 - The constitution binds HOW code is written (not just conduct) for EVERY executor — Claude, Codex, or any subagent, any environment: follow the `constitution/README.md` coding standards at implement/grill/review, cite them, never re-derive. Approval then LOCKS the contract until the PR opens — any post-approval change stops for the human (done+shipped is immutable → new task; done-but-unshipped → `forge task reopen`; active → amend + re-grill); never reshuffle the graph on your own authority.
+- Run ponytail on EVERY code change (write OR edit), any executor — Claude, Codex, or any subagent: climb the minimal-diff ladder (necessity/YAGNI → reuse what exists → stdlib → native → installed dep → one line → minimum viable), lazy but never negligent (never drop validation, error handling, security, or accessibility). The delegate brief always inlines it and review enforces it (harness.yaml implementation notes); it is not a record-time gate.
 - Keep tasks bounded and capability-driven; plans bind one roadmap story and attest all active decisions.
 - The session write lock is always armed: delegate locked writes; use `forge mode degraded` only during a companion outage.
-- Do not decompose by document file or arbitrary file count.
-- Do not bypass `verify.py` with ad hoc validation commands.
+- Do not decompose by document file or arbitrary file count, nor bypass `verify.py` with ad hoc validation commands.
 - Evidence enters `.factory/` only via schema-validated recorders (pinned `generated_by`), never by hand.
 - Narration budget (conduct §8): one line per state change; findings and refusals always in full; process chatter never.
-- Review = the orchestrating session's autoreview (0011), looped until clean: review → delegate fixes to Codex → re-review; never a Codex review job, never nested reviewers.
+- Review = ONE three-lens pass PER TASK via `./forge review <id>`, run by Codex, looped until clean (review → delegate fixes → re-review) and recorded before `pr-ready` (0011, 0049); never nested reviewers.
 - One worktree/story; sequential tasks; dependency-ready stories may parallelize (0002). Delegation/proof commands are trusted inputs; observed descendant cleanup is not hostile-code containment.
 - Keep the template repo independent of any client-specific source repo.
 - Do not keep long policy blocks in `AGENTS.md`; move them into docs.

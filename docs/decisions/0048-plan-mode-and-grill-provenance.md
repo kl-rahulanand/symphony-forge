@@ -7,6 +7,11 @@ stories: [plan-mode-and-grill-provenance]
 
 # Plan mode and grill provenance are enforced, not advisory
 
+> **Amended by 0050 (2026-09-03).** The plan-mode marker requirement below is
+> withdrawn: plan authoring is mode-agnostic, and the digest-bound grill with
+> its recorded round floor is the provenance. Everything else here — grill-round
+> provenance and the ledger-matched round floors — remains in force.
+
 ## Context
 
 `forge next` prints "MANDATORY: enter plan mode" and decision 0044 says every

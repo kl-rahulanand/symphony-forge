@@ -111,6 +111,16 @@ phases:
       - skill: "animation-vocabulary"
         when: "naming a motion effect precisely in a spec or prompt"
     notes: >-
+      Ponytail is the BINDING minimal-diff coding discipline for whoever writes
+      or edits code — held strictly, but NOT a record-time attestation gate.
+      It is enforced on BOTH ends: (1) doctor installs the skill (REQUIRED) into
+      both runtimes' skill dirs from upstream, so a re-run of `doctor --fix`
+      picks up updates — never vendor the skill files into the repo; (2) since a
+      per-machine install can be missing, `./forge delegate` ALWAYS inlines the
+      full ladder into every implementer brief as the guaranteed floor, so the
+      delegate is never without it; (3) the autoreview quality lens flags
+      ladder violations (over-engineering) at review. The recorder never demands
+      it in skills_used.
       The implementer also writes and runs the automated tests and records
       the testing artifact — there is no separate tester subagent.
       Design skills (emilkowalski/skills + Anthropic frontend-design,
@@ -142,8 +152,10 @@ phases:
       the artifact stays generated_by: autoreview.
     notes: >-
       ONE autoreview run reviews through three lenses (quality incl.
-      over-engineering, performance, security) and emits the three gate
-      artifacts. Never nest reviewers; never review inline in the
+      over-engineering AND cyclomatic complexity, performance, security) and
+      emits the three gate artifacts. The quality lens ALWAYS assesses
+      cyclomatic complexity — excessively tangled control flow is a blocking
+      `cyclomatic-complexity` finding. Never nest reviewers; never review inline in the
       coordinating session.
   ship:
     owner: "factory/scripts/pr_ready.py"
