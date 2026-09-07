@@ -89,11 +89,12 @@ implementation does not enforce it end to end:
   scope, architecture, security/privacy, destructive migration, material
   cost, reliability) arrive as escalation packets. A grill records only
   after its rounds are sanctioned. Each declared gap needs either a matching
-  rounds entry or a named-source citation. Every spec, requirements, plan
-  and task grill delivers ledger-matched AskUserQuestion rounds meeting
-  GATE_ROUND_FLOORS (spec 2, requirements 1, plan 2, task 1) with
-  `frontier_empty: true` attested on the final round; zero-round grills are
-  refused for these gates (decision 0048).
+  rounds entry or a named-source citation. EVERY grill gate — spec, signoff,
+  epics, requirements, plan, task — delivers ledger-matched AskUserQuestion
+  rounds meeting the floor declared in its `grill_gates.GATES` row (one round,
+  a floor and not a target) with `frontier_empty: true` attested on the final
+  round; zero-round grills are refused for every gate. `signoff` and `epics`
+  previously sat outside this check and recorded with none (decision 0048).
 - **Approval and closeout integrity (FORGE-ACC-3).** Approved `plan save`
   stores an `approved_plan_sha256` (excluding the sanctioned assumptions
   appendix) that every later gate rederives — an edited plan requires a

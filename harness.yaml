@@ -26,6 +26,13 @@ modes:
     model: "gpt-5.6-terra"
     reasoning: "high"
     bound: 5
+  # The cold reader. griller.md requires gpt-5.6-terra at xhigh: a fresh model
+  # context independent of whoever authored the artifact. Pinned here rather
+  # than hardcoded in the launcher, beside every other model pin.
+  grill:
+    model: "gpt-5.6-terra"
+    reasoning: "xhigh"
+    bound: 0
 
 phases:
   discovery: # 0a
@@ -97,7 +104,9 @@ phases:
   implementation:
     owner: "codex:/codex:rescue"
     model: "gpt-5.6-sol"
-    reasoning: "medium (escalate effort to high for migrations/cross-domain/security-sensitive)"
+    # Floor, not a ceiling. Escalate with `./forge delegate <id> --effort high`
+    # for migrations, cross-domain work, or security-sensitive changes.
+    reasoning: "medium"
     prompts: "factory/prompts/implementer.md"
     required_skills: # ENFORCED by feature type — the decomposition's user_facing flag:
       # the recorder refuses a user-facing testing artifact unless skills_used

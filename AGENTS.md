@@ -86,14 +86,14 @@ python3 factory/scripts/pr_ready.py
 
 ## Hard Gates
 
-A task is not PR-ready until all of these exist:
-- approved plan
-- `.factory/run.json`
-- `.factory/decomposition.json`
-- `.factory/verify.json`
-- `.factory/tests.json`
-- `.factory/reviews/{quality,performance,security}.json`
-- `.factory/outcome.json` (what the story delivered — `./forge outcome set`)
+Proof belongs to the TASK that made it — under
+`.factory/stories/<key>/tasks/<id>/`: `verify.json`, `tests.json`,
+`reviews/{quality,performance,security}.json`. Plan, `run.json` and
+`decomposition.json` stay story-scoped.
+
+A STORY ships when every task marker is on the trunk with clean proof;
+closeout re-verifies nothing. Its only story-scoped proof is `outcome.json`
+(`./forge outcome set`) — the one question no task can answer.
 
 ## Non-Negotiables
 
