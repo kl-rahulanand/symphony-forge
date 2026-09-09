@@ -113,6 +113,7 @@ def proof_problems(root: Path, key: str, task_id: str) -> list[str]:
         problems.append(
             f"tests.json records automated status={automated.get('status')!r}, not 'passed'")
 
+    reviews: dict[str, dict] = {}
     for lens in LENSES:
         review = evidence(root, key, f"reviews/{lens}.json", task_id)
         if review is None:
@@ -120,6 +121,7 @@ def proof_problems(root: Path, key: str, task_id: str) -> list[str]:
                 f"reviews/{lens}.json is not recorded — run `./forge review {task_id}` "
                 "(one three-lens pass, run by Codex, 0049)")
             continue
+        reviews[lens] = review
         if review.get("blocking_findings"):
             problems.append(
                 f"reviews/{lens}.json still has {len(review['blocking_findings'])} "
@@ -128,6 +130,18 @@ def proof_problems(root: Path, key: str, task_id: str) -> list[str]:
         if not isinstance(score, (int, float)) or score < MIN_SCORE:
             problems.append(
                 f"reviews/{lens}.json scores {score!r}; a shipped task needs >= {MIN_SCORE}")
+
+    # Incremental delta review (0053): a clean score does not prove the WHOLE
+    # task diff was reviewed. When the reviews carry a coverage chain, this PR
+    # gate must verify it, exactly like the local task seal — otherwise a task
+    # whose coverage stops short, disagrees across lenses, or skips a product
+    # delta could still merge. Legacy full-diff reviews carry no coverage and
+    # are unaffected. The tip to reach is the reviewed commit, not the CI merge
+    # HEAD, so several tasks can share a branch.
+    if len(reviews) == len(LENSES):
+        from factory_lib import _review_coverage_problems
+        tip = reviews["quality"].get("commit")
+        problems.extend(_review_coverage_problems(root, reviews, head=tip))
     return problems
 
 

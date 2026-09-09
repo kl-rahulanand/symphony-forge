@@ -1316,7 +1316,9 @@ def require_coherent_review_run(root: Path, reviews: dict[str, dict]) -> list[st
     return _review_coverage_problems(root, reviews)
 
 
-def _review_coverage_problems(root: Path, reviews: dict[str, dict]) -> list[str]:
+def _review_coverage_problems(
+    root: Path, reviews: dict[str, dict], head: str | None = None,
+) -> list[str]:
     """Close-gate check for incremental delta review (decision 0053).
 
     When `forge review` runs the delta since the last clean round, the latest
@@ -1334,8 +1336,14 @@ def _review_coverage_problems(root: Path, reviews: dict[str, dict]) -> list[str]
     """
     aspects = ("quality", "performance", "security")
     chains = {a: reviews.get(a, {}).get("coverage") for a in aspects}
-    if not all(isinstance(chains[a], list) and chains[a] for a in aspects):
-        return []
+    present = {a: isinstance(chains[a], list) and bool(chains[a]) for a in aspects}
+    if not any(present.values()):
+        return []  # no coverage anywhere → a single full-diff review (legacy)
+    if not all(present.values()):
+        missing = ", ".join(a for a in aspects if not present[a])
+        return [f"review coverage is recorded on some lenses but not {missing}; "
+                "rerun `./forge review` so all three carry one coverage chain "
+                "(fail closed rather than skip the check)"]
 
     def normalize(chain: list) -> list[tuple[str, str]] | None:
         segs: list[tuple[str, str]] = []
@@ -1359,10 +1367,13 @@ def _review_coverage_problems(root: Path, reviews: dict[str, dict]) -> list[str]
         if earlier[1] != following[0]:
             return ["review coverage is not contiguous; rerun `./forge review` "
                     "so the reviewed segments chain to HEAD"]
-    head = head_sha(root)
-    if head and segments[-1][1] != head:
-        return [f"review coverage stops at {segments[-1][1][:8]} but HEAD is "
-                f"{head[:8]}; rerun `./forge review` for the latest commits"]
+    # At a per-task gate the tip to reach is the task's reviewed commit, not the
+    # global (or CI merge) HEAD — several tasks can share a branch. Callers pass
+    # it; the story-level caller leaves it None and reaches for HEAD.
+    tip = head or head_sha(root)
+    if tip and segments[-1][1] != tip:
+        return [f"review coverage stops at {segments[-1][1][:8]} but the reviewed "
+                f"tip is {tip[:8]}; rerun `./forge review` for the latest commits"]
 
     def is_ancestor(ancestor: str, descendant: str) -> bool:
         return subprocess.run(
@@ -1381,8 +1392,8 @@ def _review_coverage_problems(root: Path, reviews: dict[str, dict]) -> list[str]
     trunk = default_trunk_branch(root)
     merge_base = subprocess.run(
         ["git", "merge-base", f"origin/{trunk}", "HEAD"],
-        cwd=root, capture_output=True, text=True, env=clean_git_env(),
-        encoding="utf-8", errors="surrogateescape",
+        cwd=root, capture_output=True, text=True, encoding="utf-8",
+        env=clean_git_env(),
     )
     first = segments[0][0]
     base = merge_base.stdout.strip() if merge_base.returncode == 0 else ""
@@ -1463,19 +1474,33 @@ def task_proof_problems(root: Path, key: str, task: dict) -> list[str]:
                 f"{task_id}: functional check must have no blockers and score >= 8 "
                 "— fix what it found and re-record it")
 
+    reviews: dict[str, dict] = {}
     for lens in ("quality", "performance", "security"):
         review = read(f"reviews/{lens}.json")
         if not review:
             problems.append(
                 f"{task_id}: no {lens} review — `./forge review {task_id}` runs all "
                 "three lenses in Codex and records them")
-        elif not review_passed(review):
+            continue
+        reviews[lens] = review
+        if not review_passed(review):
             blocking = len(review.get("blocking_findings") or [])
             problems.append(
                 f"{task_id}: {lens} review is not clean ({blocking} blocking "
                 f"finding(s)) — delegate the fixes with `./forge delegate {task_id}`, "
                 f"commit, then rerun `./forge review {task_id}`. Findings are work, "
                 "not a question for the human.")
+    # Incremental delta review (0053): a clean SCORE is not enough — when the
+    # review was recorded delta-by-delta, the coverage chain must still prove
+    # the whole task diff was reviewed. This is the shipping gate a task PR
+    # merges on, so the coverage guarantee has to hold HERE, not only at the
+    # story-level/reseal paths. Legacy full-diff reviews carry no coverage and
+    # are unaffected.
+    if len(reviews) == 3:
+        tip = reviews["quality"].get("commit")
+        problems.extend(
+            f"{task_id}: {p}"
+            for p in _review_coverage_problems(root, reviews, head=tip))
     return problems
 
 

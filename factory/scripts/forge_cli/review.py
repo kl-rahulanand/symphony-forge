@@ -609,13 +609,55 @@ def cmd_review(args: argparse.Namespace) -> None:
     # clean: the segment the whole task diff is proven by must be one every lens
     # cleared. A single-lens (`--lens`) run never advances it.
     from forge_cli.readiness import review_passed
-    round_clean = advancing and all(review_passed(a) for a in outcome.values())
-    new_coverage = [dict(seg) for seg in prior_coverage]
-    if round_clean:
-        new_coverage.append({"from": review_base, "to": tip_sha})
-    for lens in lenses:
-        if advancing or prior_coverage:
+    delta = review_base != base_sha  # only true in an advancing delta re-review
+    if advancing:
+        # A whole-diff review (first pass, or `--full`) covers everything from
+        # the task base, so its one segment REPLACES any earlier chain — keeping
+        # the old segments would leave a non-contiguous [base..T1, base..HEAD].
+        # A delta review extends the chain it built on.
+        new_coverage = [dict(seg) for seg in prior_coverage] if delta else []
+        if all(review_passed(a) for a in outcome.values()):
+            new_coverage.append({"from": review_base, "to": tip_sha})
+        for lens in lenses:
             outcome[lens]["coverage"] = new_coverage
+    else:
+        # Single-lens iteration: leave the shared chain exactly as recorded so a
+        # re-run does not drop or forge coverage on that lens.
+        for lens in lenses:
+            existing = load_json(
+                task_evidence_path(base, story, args.id, f"reviews/{lens}.json"),
+                default={},
+            ).get("coverage")
+            if isinstance(existing, list):
+                outcome[lens]["coverage"] = existing
+
+    # Delta re-review carries forward prior IMPLEMENTED contract verdicts for
+    # contracts the reviewer did not see this round (0053): the quality lens
+    # sees only the delta, so a contract implemented in an already-reviewed
+    # segment would otherwise fail-close to partial -> blocking and make every
+    # incremental quality review fail. A contract the delta actually touched is
+    # re-verdicted by the reviewer and keeps its fresh verdict.
+    if delta and "quality" in outcome:
+        prior_quality = load_json(
+            task_evidence_path(base, story, args.id, "reviews/quality.json"),
+            default={},
+        )
+        prior_implemented = {
+            v.get("contract_id"): v
+            for v in prior_quality.get("contract_verdicts") or []
+            if isinstance(v, dict) and v.get("verdict") == "implemented"
+        }
+        for verdict in outcome["quality"].get("contract_verdicts") or []:
+            cid = verdict.get("contract_id")
+            unseen = str(verdict.get("evidence", "")).startswith(
+                "the reviewer emitted no VERDICT line")
+            if verdict.get("verdict") == "partial" and unseen and cid in prior_implemented:
+                verdict["verdict"] = "implemented"
+                verdict["evidence"] = (
+                    "carried forward from an earlier reviewed segment (unchanged "
+                    "by this delta): "
+                    + str(prior_implemented[cid].get("evidence", ""))
+                )[:2000]
 
     for lens in lenses:
         payload = tmp / f"{lens}.artifact.json"

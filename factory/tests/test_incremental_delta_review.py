@@ -109,6 +109,43 @@ def test_legacy_reviews_without_coverage_still_pass(repo):
     assert require_coherent_review_run(repo, reviews) == []
 
 
+def test_mixed_coverage_presence_fails_closed(repo):
+    base = head(repo)
+    tip = _commit(repo, "src/a.py", "a = 1\n")
+    reviews = _reviews(repo, [{"from": base, "to": tip}])
+    # One lens never recorded coverage while the others did — must fail closed,
+    # not silently fall back to the legacy (coverage-skipping) path.
+    del reviews["security"]["coverage"]
+    problems = require_coherent_review_run(repo, reviews)
+    assert problems and "some lenses but not security" in problems[0], problems
+
+
+def test_coverage_is_enforced_at_the_task_shipping_gate(repo):
+    import json as _json
+
+    from factory_lib import task_evidence_path, task_proof_problems
+    base = head(repo)
+    t1 = _commit(repo, "src/a.py", "a = 1\n")
+    tip = _commit(repo, "src/b.py", "b = 2\n")  # reviewed tip
+
+    def write(name, payload):
+        path = task_evidence_path(repo, "ENG-1", "T1", name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_json.dumps(payload))
+
+    write("verify.json", {"ok": True, "commit": tip, "generated_by": "verify"})
+    write("tests.json", {"automated": {"status": "passed",
+                                       "generated_by": "implementer"}})
+    # Clean scores, but coverage stops at t1 while the reviewed tip is `tip`.
+    for lens in ("quality", "performance", "security"):
+        write(f"reviews/{lens}.json", {
+            "score": 9, "blocking_findings": [], "generated_by": "autoreview",
+            "commit": tip, "coverage": [{"from": base, "to": t1}]})
+
+    problems = task_proof_problems(repo, "ENG-1", {"id": "T1"})
+    assert any("coverage" in p for p in problems), problems
+
+
 def _write_lens_coverage(repo, story: str, task_id: str, per_lens: dict) -> None:
     import json as _json
 
