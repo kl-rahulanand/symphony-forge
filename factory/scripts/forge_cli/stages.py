@@ -1619,6 +1619,77 @@ def cmd_done(args: argparse.Namespace) -> None:
         _finish_stage(base, args, data, stage, task_for(base, args.id))
 
 
+def cmd_reseal(args: argparse.Namespace) -> None:
+    """Refresh a stage-local review stamp to HEAD on a branch review's authority.
+
+    A stage seals its `local_review_stamp` against the WHOLE product tree
+    (`stage_review_binding` → `product_tree_digest`). Any later product edit —
+    even a one-line branch-review fix that a fresh three-lens branch review
+    already cleared at HEAD — moves that digest and stales the stamp, so
+    `stage done` / `pr_ready` refuse until the local autoreview is re-run and
+    re-stamped. During a branch-review cleanup phase that is O(fixes) redundant
+    local rounds, and `forge delegate` cannot run the seal at all when the fix
+    was host-applied (the companion sandbox has no network).
+
+    This refreshes the stamp to the current committed tree WITHOUT a new local
+    autoreview, but ONLY on real authority: the three-lens BRANCH review must be
+    present, clean, stamped at HEAD, and coherently bound to the current
+    committed diff (`review-brief --all`). It never invents trust — it reuses a
+    review that already covers exactly this tree. First seal still comes from a
+    real local review; reseal only re-authorizes an existing one.
+    """
+    from factory_lib import load_review_artifacts, require_coherent_review_run
+
+    base = Path(args.repo).resolve() if args.repo else repo_root()
+    data = load_stages(base)
+    if not data:
+        fail("no .factory/stages.json — record the decomposition first")
+    stage = _find(data, args.id)
+    if stage.get("status") != "active":
+        fail(f"{args.id} is {stage.get('status', 'pending')!r}, not active — "
+             "reseal refreshes the stamp of the one stage currently under review.")
+    if not isinstance(stage.get("local_review_stamp"), dict):
+        fail(f"{args.id} has no stage-local review stamp to refresh. Record a "
+             "clean local review first, then reseal only re-authorizes it.")
+
+    reviews, problems = load_review_artifacts(base, require_head=True)
+    problems.extend(require_coherent_review_run(base, reviews))
+    if problems:
+        fail(f"cannot reseal {args.id}: the three-lens branch review does not "
+             "cover HEAD clean. Reseal borrows a branch review's authority, so it "
+             "must first exist, be clean, be stamped at HEAD, and share one "
+             "`review-brief --all` run:\n  - " + "\n  - ".join(problems))
+
+    product_dirt = sorted(product_tree_snapshot(base)["dirty"])
+    if product_dirt:
+        fail(f"{args.id} has uncommitted or staged PRODUCT changes: "
+             f"{', '.join(product_dirt[:10])}. Commit exactly the reviewed tree "
+             "before reseal — the stamp must bind a committed HEAD.")
+
+    task = task_for(base, args.id)
+    if not task:
+        fail(f"active stage {args.id} has no recorded task contract")
+
+    from .delegate import delegation_exclusion
+    with delegation_exclusion(base, "stages", kind="stage-state", namespace="state"):
+        data = load_stages(base)
+        stage = _find(data, args.id)
+        if stage.get("status") != "active":
+            fail(f"{args.id} changed state while reseal waited for exclusive "
+                 "access; inspect `forge stage list` and retry.")
+        stage["local_review_stamp"] = {
+            **stage_review_binding(base, stage, task),
+            "recorded_at": now_iso(),
+            "generated_by": "branch-review-reseal",
+        }
+        write_stages(base, data)
+    append_event(base, "review-stage-local-reseal", actor="autoreview",
+                 story=data.get("issue", ""), detail=args.id)
+    head = head_sha(base) or ""
+    print(f"Resealed stage-local review stamp for {args.id} to branch-reviewed "
+          f"HEAD {head[:8]}. `forge stage done` can now close it.")
+
+
 def cmd_list(args: argparse.Namespace) -> None:
     base = Path(args.repo).resolve() if args.repo else repo_root()
     data = load_stages(base)

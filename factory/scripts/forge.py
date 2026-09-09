@@ -538,6 +538,13 @@ def main() -> None:
                            "and the gap lands in the timeline")
     p_sd.add_argument("--repo")
     p_sd.set_defaults(func=stages_mod.cmd_done)
+    p_sr = st_sub.add_parser(
+        "reseal",
+        help="refresh a stale stage-local review stamp to HEAD when a clean "
+             "three-lens BRANCH review already covers it (no new local autoreview)")
+    p_sr.add_argument("id")
+    p_sr.add_argument("--repo")
+    p_sr.set_defaults(func=stages_mod.cmd_reseal)
     p_sa = st_sub.add_parser(
         "amend-scope",
         help="record measured paths this task touched but did not declare")
