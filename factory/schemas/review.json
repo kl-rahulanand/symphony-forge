@@ -18,7 +18,8 @@
     "contract_verdicts": "list",
     "review_run_id": "str",
     "brief_sha256": "str",
-    "branch_diff_digest": "str"
+    "branch_diff_digest": "str",
+    "coverage": "list"
   },
   "required_skills": {
     "user_facing": ["review-animations"]
@@ -27,5 +28,6 @@
     "score": [0, 10]
   },
   "findings_note": "Finding entries SHOULD be objects {category: kebab-case defect class, area: module/dir, summary} so `forge findings patterns` can cluster recurring classes across tasks; plain strings are accepted but cluster on exact text only. The quality lens ALWAYS assesses cyclomatic complexity: excessively tangled control flow is a blocking finding under the stable `cyclomatic-complexity` category (see factory/prompts/reviewer.md).",
-  "contract_verdicts_note": "Quality reviews for decompositions that declare plan_contracts require entries {contract_id, verdict: implemented|partial|missing, evidence}; evidence is a non-empty file:line explanation."
+  "contract_verdicts_note": "Quality reviews for decompositions that declare plan_contracts require entries {contract_id, verdict: implemented|partial|missing, evidence}; evidence is a non-empty file:line explanation.",
+  "coverage_note": "Incremental delta review (decision 0053): each entry {from, to} is a committed range this lens cleanly reviewed. `forge review` reviews only the delta since the last clean round and appends a segment; the segments across the three lenses advance together, stay contiguous, and end at HEAD, so the close gate can prove the whole task diff was reviewed across rounds. Absent/empty means a single full-diff review (legacy behaviour)."
 }

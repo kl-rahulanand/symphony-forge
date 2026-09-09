@@ -456,6 +456,32 @@ def _run_skill(skill: Path, worktree: Path, base_sha: str, prompt_rel: str,
     return json.loads(json_out.read_text(encoding="utf-8"))
 
 
+def _prior_coverage(base: Path, story: str, task_id: str) -> list[dict]:
+    """The review coverage chain already recorded for this task (0053).
+
+    Read it from all three lens artifacts; only treat it as a chain to extend
+    when the three agree (they advance together). Any disagreement or a missing
+    lens means start fresh with a full-diff review.
+    """
+    chains: list[list | None] = []
+    for lens in LENSES:
+        path = task_evidence_path(base, story, task_id, f"reviews/{lens}.json")
+        data = load_json(path, default={}) if path.is_file() else {}
+        cov = data.get("coverage")
+        chains.append(cov if isinstance(cov, list) else None)
+    if any(chain is None for chain in chains) or any(
+            chain != chains[0] for chain in chains):
+        return []
+    segments: list[dict] = []
+    for seg in chains[0]:
+        if (isinstance(seg, dict) and isinstance(seg.get("from"), str)
+                and isinstance(seg.get("to"), str) and seg["from"] and seg["to"]):
+            segments.append({"from": seg["from"], "to": seg["to"]})
+        else:
+            return []
+    return segments
+
+
 def cmd_review(args: argparse.Namespace) -> None:
     from .stages import WORKFLOW_PATHS, load_stages, task_for
 
@@ -495,14 +521,35 @@ def cmd_review(args: argparse.Namespace) -> None:
 
     tip_sha = _require_git(base, "resolving HEAD", "rev-parse", "--verify", "HEAD^{commit}")
     base_sha = resolve_review_base(base, stage, state, tip_sha)
+
+    # Incremental delta review (decision 0053): once a full three-lens round has
+    # come back clean, a re-review after fixes only needs to cover the new
+    # commits. Review from the last cleanly-covered tip instead of the task
+    # base; the coverage chain (accumulated across rounds) is what proves the
+    # whole task diff was reviewed. `--full` forces the whole diff again.
+    advancing = getattr(args, "lens", None) is None
+    prior_coverage = _prior_coverage(base, story, args.id)
+    review_base = base_sha
+    if advancing and prior_coverage and not getattr(args, "full", False):
+        last_tip = prior_coverage[-1]["to"]
+        if last_tip != tip_sha and _git(
+                base, "merge-base", "--is-ancestor", last_tip, tip_sha).returncode == 0:
+            review_base = last_tip
+            print(f"incremental review: only the delta since the last clean "
+                  f"review ({last_tip[:7]}..{tip_sha[:7]}); pass --full to review "
+                  "the whole task diff")
+
     scope = sorted(
         p for p in _require_git(base, "listing the task diff", "diff",
-                                "--name-only", f"{base_sha}...HEAD").splitlines()
+                                "--name-only", f"{review_base}...HEAD").splitlines()
         if p.strip() and not p.startswith(WORKFLOW_PATHS)
         and not p.startswith(HARNESS_PREFIXES)
     )
     if not scope:
-        fail(f"no product paths changed between {base_sha[:12]} and HEAD — nothing to review")
+        fail(f"no product paths changed between {review_base[:12]} and HEAD — "
+             "nothing to review"
+             + (" (already reviewed through HEAD; commit fixes first, or pass "
+                "--full)" if review_base != base_sha else ""))
 
     # Mint the branch review run the recorder binds every artifact to.
     cmd_review_brief(argparse.Namespace(id=None, all=True, repo=str(base)))
@@ -534,7 +581,7 @@ def cmd_review(args: argparse.Namespace) -> None:
         # scoped to the committed task diff.
         _require_git(base, "creating the review worktree", "worktree", "add",
                      "--detach", str(worktree), tip_sha)
-        review_tip = product_only_tip(worktree, base_sha)
+        review_tip = product_only_tip(worktree, review_base)
         for lens in lenses:
             rel, body = prompts[lens]
             target = worktree / rel
@@ -542,10 +589,10 @@ def cmd_review(args: argparse.Namespace) -> None:
             target.write_bytes(body)
         for lens in lenses:
             print(f"== {lens} lens: releasing Codex over {len(scope)} path(s) "
-                  f"({base_sha[:7]}..{review_tip[:7]}, task tip {tip_sha[:7]}) — "
+                  f"({review_base[:7]}..{review_tip[:7]}, task tip {tip_sha[:7]}) — "
                   "watch the heartbeat below ==", flush=True)
             reports[lens] = _run_skill(
-                skill, worktree, base_sha, prompts[lens][0], tmp / f"{lens}.json",
+                skill, worktree, review_base, prompts[lens][0], tmp / f"{lens}.json",
                 args.engine, args.max_priority,
             )
     finally:
@@ -555,10 +602,66 @@ def cmd_review(args: argparse.Namespace) -> None:
     recorder = base / "factory" / "scripts" / "record_review_from_json.py"
     outcome: dict[str, dict] = {}
     for lens in lenses:
-        artifact = _artifact(lens, task, reports[lens], scope, base_sha, tip_sha,
-                             skills_used, all_tasks, started)
+        outcome[lens] = _artifact(lens, task, reports[lens], scope, review_base,
+                                  tip_sha, skills_used, all_tasks, started)
+
+    # Advance the coverage chain only when a full three-lens round comes back
+    # clean: the segment the whole task diff is proven by must be one every lens
+    # cleared. A single-lens (`--lens`) run never advances it.
+    from forge_cli.readiness import review_passed
+    delta = review_base != base_sha  # only true in an advancing delta re-review
+    if advancing:
+        # A whole-diff review (first pass, or `--full`) covers everything from
+        # the task base, so its one segment REPLACES any earlier chain — keeping
+        # the old segments would leave a non-contiguous [base..T1, base..HEAD].
+        # A delta review extends the chain it built on.
+        new_coverage = [dict(seg) for seg in prior_coverage] if delta else []
+        if all(review_passed(a) for a in outcome.values()):
+            new_coverage.append({"from": review_base, "to": tip_sha})
+        for lens in lenses:
+            outcome[lens]["coverage"] = new_coverage
+    else:
+        # Single-lens iteration: leave the shared chain exactly as recorded so a
+        # re-run does not drop or forge coverage on that lens.
+        for lens in lenses:
+            existing = load_json(
+                task_evidence_path(base, story, args.id, f"reviews/{lens}.json"),
+                default={},
+            ).get("coverage")
+            if isinstance(existing, list):
+                outcome[lens]["coverage"] = existing
+
+    # Delta re-review carries forward prior IMPLEMENTED contract verdicts for
+    # contracts the reviewer did not see this round (0053): the quality lens
+    # sees only the delta, so a contract implemented in an already-reviewed
+    # segment would otherwise fail-close to partial -> blocking and make every
+    # incremental quality review fail. A contract the delta actually touched is
+    # re-verdicted by the reviewer and keeps its fresh verdict.
+    if delta and "quality" in outcome:
+        prior_quality = load_json(
+            task_evidence_path(base, story, args.id, "reviews/quality.json"),
+            default={},
+        )
+        prior_implemented = {
+            v.get("contract_id"): v
+            for v in prior_quality.get("contract_verdicts") or []
+            if isinstance(v, dict) and v.get("verdict") == "implemented"
+        }
+        for verdict in outcome["quality"].get("contract_verdicts") or []:
+            cid = verdict.get("contract_id")
+            unseen = str(verdict.get("evidence", "")).startswith(
+                "the reviewer emitted no VERDICT line")
+            if verdict.get("verdict") == "partial" and unseen and cid in prior_implemented:
+                verdict["verdict"] = "implemented"
+                verdict["evidence"] = (
+                    "carried forward from an earlier reviewed segment (unchanged "
+                    "by this delta): "
+                    + str(prior_implemented[cid].get("evidence", ""))
+                )[:2000]
+
+    for lens in lenses:
         payload = tmp / f"{lens}.artifact.json"
-        payload.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
+        payload.write_text(json.dumps(outcome[lens], indent=2) + "\n", encoding="utf-8")
         proc = subprocess.run(
             [sys.executable, str(recorder), "--aspect", lens, "--input", str(payload)],
             cwd=base, capture_output=True, text=True, encoding="utf-8",
@@ -567,7 +670,6 @@ def cmd_review(args: argparse.Namespace) -> None:
         if proc.returncode != 0:
             fail(f"recording the {lens} artifact failed:\n"
                  f"{proc.stdout.strip()}\n{proc.stderr.strip()}")
-        outcome[lens] = artifact
     shutil.rmtree(tmp, ignore_errors=True)
 
     blocking_total = sum(len(a["blocking_findings"]) for a in outcome.values())

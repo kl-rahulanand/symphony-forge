@@ -601,6 +601,10 @@ def main() -> None:
         "--lens", choices=list(review_mod.LENSES),
         help="run a single lens (default: all three)")
     p_review.add_argument(
+        "--full", action="store_true",
+        help="review the whole task diff, not just the delta since the last "
+             "clean review (resets incremental coverage, decision 0053)")
+    p_review.add_argument(
         "--engine", default="codex",
         help="autoreview engine (default: codex — the review is Codex's, 0011)")
     p_review.add_argument(
