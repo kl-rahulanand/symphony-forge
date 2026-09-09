@@ -1313,6 +1313,89 @@ def require_coherent_review_run(root: Path, reviews: dict[str, dict]) -> list[st
             "current committed product diff; rerun `./forge review-brief --all` "
             "and all three lenses"
         ]
+    return _review_coverage_problems(root, reviews)
+
+
+def _review_coverage_problems(root: Path, reviews: dict[str, dict]) -> list[str]:
+    """Close-gate check for incremental delta review (decision 0053).
+
+    When `forge review` runs the delta since the last clean round, the latest
+    artifacts are still bound to the current whole-branch digest (checked
+    above), but the reviewer only saw the delta — so the digest check alone no
+    longer proves the WHOLE task diff was reviewed. Each lens records a
+    `coverage` chain of the committed ranges it cleanly reviewed; the three
+    advance together, so their chains must be identical, contiguous, and reach
+    HEAD, and nothing product-relevant may precede the first reviewed segment.
+    Together with the per-round coherence checked above, that proves every
+    committed product change was reviewed by all three lenses across the rounds.
+
+    Absent or empty coverage means a single full-diff review (legacy) — nothing
+    extra to prove, so this returns no problems.
+    """
+    aspects = ("quality", "performance", "security")
+    chains = {a: reviews.get(a, {}).get("coverage") for a in aspects}
+    if not all(isinstance(chains[a], list) and chains[a] for a in aspects):
+        return []
+
+    def normalize(chain: list) -> list[tuple[str, str]] | None:
+        segs: list[tuple[str, str]] = []
+        for seg in chain:
+            if not isinstance(seg, dict):
+                return None
+            frm, to = seg.get("from"), seg.get("to")
+            if not (isinstance(frm, str) and frm and isinstance(to, str) and to):
+                return None
+            segs.append((frm, to))
+        return segs
+
+    normalized = {a: normalize(chains[a]) for a in aspects}
+    if any(normalized[a] is None for a in aspects):
+        return ["review coverage entries must be {from, to} commit shas"]
+    segments = normalized["quality"]
+    if any(normalized[a] != segments for a in ("performance", "security")):
+        return ["review coverage must be identical across the three lenses; "
+                "rerun `./forge review` so all three advance together"]
+    for earlier, following in zip(segments, segments[1:]):
+        if earlier[1] != following[0]:
+            return ["review coverage is not contiguous; rerun `./forge review` "
+                    "so the reviewed segments chain to HEAD"]
+    head = head_sha(root)
+    if head and segments[-1][1] != head:
+        return [f"review coverage stops at {segments[-1][1][:8]} but HEAD is "
+                f"{head[:8]}; rerun `./forge review` for the latest commits"]
+
+    def is_ancestor(ancestor: str, descendant: str) -> bool:
+        return subprocess.run(
+            ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+            cwd=root, capture_output=True, env=clean_git_env(),
+        ).returncode == 0
+
+    for frm, to in segments:
+        if frm != to and not is_ancestor(frm, to):
+            return [f"review coverage segment {frm[:8]}..{to[:8]} is not a "
+                    "commit range on this branch"]
+
+    from forge_cli.review import HARNESS_PREFIXES
+    from forge_cli.stages import WORKFLOW_PATHS, committed_paths
+
+    trunk = default_trunk_branch(root)
+    merge_base = subprocess.run(
+        ["git", "merge-base", f"origin/{trunk}", "HEAD"],
+        cwd=root, capture_output=True, text=True, env=clean_git_env(),
+        encoding="utf-8", errors="surrogateescape",
+    )
+    first = segments[0][0]
+    base = merge_base.stdout.strip() if merge_base.returncode == 0 else ""
+    if base and base != first and is_ancestor(base, first):
+        pre = sorted(
+            path for path in committed_paths(root, base, first)
+            if not path.startswith(WORKFLOW_PATHS)
+            and not path.startswith(HARNESS_PREFIXES)
+        )
+        if pre:
+            return ["product changes before the first reviewed commit were "
+                    f"never reviewed: {', '.join(pre[:5])}; rerun "
+                    "`./forge review --full`"]
     return []
 
 
